@@ -1,0 +1,427 @@
+# Respan Documentation Index
+# Auto-generated from docs front matter
+
+## Apis > Automation > Automations
+- /apis/automation/automations/create — Create automation
+- /apis/automation/automations/patch — Update automation
+
+## Apis > Automation > Conditions
+- /apis/automation/conditions/create — Create condition
+- /apis/automation/conditions/list — List conditions
+
+## Apis > Develop > Experiments V2
+- /apis/develop/experiments-v2/create — Create experiment
+- /apis/develop/experiments-v2/delete — Delete experiment
+- /apis/develop/experiments-v2/get — Retrieve experiment
+- /apis/develop/experiments-v2/list — List experiments
+- /apis/develop/experiments-v2/logs-export — Export experiment spans
+- /apis/develop/experiments-v2/logs-get — Retrieve experiment span
+- /apis/develop/experiments-v2/logs-list — List experiment spans
+- /apis/develop/experiments-v2/logs-search — Search experiment spans
+- /apis/develop/experiments-v2/logs-summary — Get experiment spans summary
+- /apis/develop/experiments-v2/logs-update — Update experiment span
+- /apis/develop/experiments-v2/search — Search experiment
+
+## Apis > Develop > Gateway
+- /apis/develop/gateway/chat-completions — Create chat completion
+
+## Apis > Develop > Multimodal
+- /apis/develop/multimodal/assemblyai — AssemblyAI integration
+- /apis/develop/multimodal/embeddings — Embeddings
+- /apis/develop/multimodal/speech-to-text — Speech to text
+- /apis/develop/multimodal/text-to-speech — Text to speech
+
+## Apis > Develop > Openai Batch
+- /apis/develop/openai-batch/batches/cancel — Cancel batch
+- /apis/develop/openai-batch/batches/create — Create batch
+- /apis/develop/openai-batch/batches/get — Retrieve batch
+- /apis/develop/openai-batch/batches/list — List batches
+- /apis/develop/openai-batch/files/content — Retrieve file content
+- /apis/develop/openai-batch/files/delete — Delete file
+- /apis/develop/openai-batch/files/get — Retrieve file
+- /apis/develop/openai-batch/files/list — List files
+- /apis/develop/openai-batch/files/upload — Upload file
+
+## Apis > Develop > Prompts
+- /apis/develop/prompts/create-prompt-version — Create version
+- /apis/develop/prompts/create-prompts — Create prompt
+- /apis/develop/prompts/delete-prompt — Delete prompt
+- /apis/develop/prompts/delete-prompt-version — Delete version
+- /apis/develop/prompts/get-prompt-versions — Retrieve versions
+- /apis/develop/prompts/get-prompts — Retrieve prompts
+- /apis/develop/prompts/update-prompt — Update prompt
+- /apis/develop/prompts/update-prompt-version — Update prompt version
+
+## Apis > Develop > Testsets
+- /apis/develop/testsets/create — Create testset
+- /apis/develop/testsets/delete — Delete testset
+- /apis/develop/testsets/get — Retrieve testset
+- /apis/develop/testsets/list — List testsets
+- /apis/develop/testsets/rows-create — Create testset rows
+- /apis/develop/testsets/rows-delete — Delete testset row
+- /apis/develop/testsets/rows-list — List testset rows
+- /apis/develop/testsets/rows-update — Update testset row
+- /apis/develop/testsets/update — Update testset
+
+## Apis > Evaluate > Datasets
+- /apis/evaluate/datasets/create — Create dataset
+- /apis/evaluate/datasets/create-with-logs — Create dataset with specified spans
+- /apis/evaluate/datasets/delete — Delete dataset
+- /apis/evaluate/datasets/eval-reports-create — Run eval on dataset
+- /apis/evaluate/datasets/eval-reports-list — List eval runs
+- /apis/evaluate/datasets/get — Retrieve dataset
+- /apis/evaluate/datasets/list — List datasets
+- /apis/evaluate/datasets/logs-add — Add spans to dataset
+- /apis/evaluate/datasets/logs-create — Create dataset span
+- /apis/evaluate/datasets/logs-delete — Delete span
+- /apis/evaluate/datasets/logs-get — Retrieve span
+- /apis/evaluate/datasets/logs-list — List spans
+- /apis/evaluate/datasets/logs-list-post — List spans with filters
+- /apis/evaluate/datasets/logs-patch — Update span (partial)
+- /apis/evaluate/datasets/logs-put — Update span
+- /apis/evaluate/datasets/logs-remove — Delete spans
+- /apis/evaluate/datasets/patch — Update dataset
+
+## Apis > Evaluate > Evaluators
+- /apis/evaluate/evaluators/create — Create evaluator
+- /apis/evaluate/evaluators/delete — Delete evaluator
+- /apis/evaluate/evaluators/get — Retrieve evaluator
+- /apis/evaluate/evaluators/list — List evaluators
+- /apis/evaluate/evaluators/run — Run evaluator
+- /apis/evaluate/evaluators/update — Update evaluator
+
+## Apis > Evaluate > Log Scores
+- /apis/evaluate/log-scores/create — Create a span score
+- /apis/evaluate/log-scores/delete — Delete span score
+- /apis/evaluate/log-scores/get — Retrieve span score
+- /apis/evaluate/log-scores/list — List span scores
+- /apis/evaluate/log-scores/update — Update span score
+
+## Apis > Evaluate > Scores
+- /apis/evaluate/scores/create — Create score
+- /apis/evaluate/scores/delete — Delete score
+- /apis/evaluate/scores/get — Retrieve score
+- /apis/evaluate/scores/list — List scores
+- /apis/evaluate/scores/update — Update score
+
+## Apis > Manage > Credit Transactions
+- /apis/manage/credit-transactions/list — List credit transactions — Returns all credit transactions for your organization, newest first
+- /apis/manage/credit-transactions/retrieve — Get transaction details — Retrieves a single credit transaction by ID
+
+## Apis > Manage > Models
+- /apis/manage/models/custom-models/create — Create custom model
+- /apis/manage/models/custom-models/delete — Delete custom model
+- /apis/manage/models/custom-models/get — Retrieve custom model
+- /apis/manage/models/custom-models/list — List custom models
+- /apis/manage/models/custom-models/update — Update custom model
+- /apis/manage/models/custom-providers/create — Create custom provider
+- /apis/manage/models/custom-providers/delete — Delete custom provider
+- /apis/manage/models/custom-providers/get — Retrieve custom provider
+- /apis/manage/models/custom-providers/list — List custom providers
+- /apis/manage/models/custom-providers/update — Update custom provider
+- /apis/manage/models/models-endpoint — List models
+
+## Apis > Manage > Temporary Api Keys
+- /apis/manage/temporary-api-keys/create-temporary-key — Create API key
+- /apis/manage/temporary-api-keys/delete-temporary-key — Delete API key
+- /apis/manage/temporary-api-keys/list-temporary-keys — List API keys
+- /apis/manage/temporary-api-keys/retrieve-temporary-key — Retrieve API key
+- /apis/manage/temporary-api-keys/update-temporary-key — Update API key
+
+## Apis > Observe > Logs
+- /apis/observe/logs/get-log-endpoint — Retrieve span
+- /apis/observe/logs/ingest — Ingest spans from traces
+- /apis/observe/logs/logs-list-endpoint — List spans
+- /apis/observe/logs/logs-summary-endpoint — Get spans summary
+- /apis/observe/logs/request-logging-endpoint — Create span
+
+## Apis > Observe > Threads
+- /apis/observe/threads/thread-list-endpoint — List thread
+
+## Apis > Observe > Traces
+- /apis/observe/traces/bulk-delete — Bulk delete traces
+- /apis/observe/traces/delete — Delete trace
+- /apis/observe/traces/get — Retrieve trace
+- /apis/observe/traces/list — List traces
+- /apis/observe/traces/otlp-ingest — Ingest traces via OTLP
+- /apis/observe/traces/summary — Retrieve traces summary
+- /apis/observe/traces/traces-ingest-from-logs — Ingest traces from logs
+
+## Apis > Observe > Users
+- /apis/observe/users/user-creation-endpoint — List customers with filters
+- /apis/observe/users/user-delete-endpoint — Delete user
+- /apis/observe/users/user-detail-endpoint — Retrieve user
+- /apis/observe/users/user-update-endpoint — Update user
+- /apis/observe/users/users-data-endpoint — List customers
+
+## Apis > Proxy Endpoints > Text Generation
+- /apis/proxy-endpoints/text-generation/regular-response — Regular Response — JSON response that is straight forward to read and parse
+- /apis/proxy-endpoints/text-generation/request-params — Text Generation — An overview of LLM generation parameters
+- /apis/proxy-endpoints/text-generation/streaming-response — Streaming Response — A faster, smoother response that boosts user experience
+
+## Apis > Reference
+- /apis/reference/api_endpoints_sop — API endpoint SOP — What the API is for
+- /apis/reference/filters_api_reference — Filters API Reference — This document describes the filtering system used across Respan endpoints (spans, traces, threads, etc.).
+
+## Changelog
+- /changelog/index — Product updates — New releases and improvements
+
+## CLAUDE
+- /CLAUDE — CLAUDE
+
+## Documentation > Admin
+- /documentation/admin/llm_provider_keys — LLM provider keys — This is the guide for how to add your own credentials in Respan
+- /documentation/admin/respan_api_keys — Respan API keys — Manage your Respan API keys
+
+## Documentation > Admin > Team_management
+- /documentation/admin/team_management/create_a_new_team — Create a new team — Learn how to create a new team in Respan.
+
+## Documentation > Features > Evals
+- /documentation/features/evals/dataset — Datasets — Create and manage datasets for evaluations and experiments.
+- /documentation/features/evals/evaluators — Evaluators — Set up LLM, code, and human evaluators to score your AI outputs.
+- /documentation/features/evals/experiments — Experiments — Test prompts across multiple test cases in a spreadsheet-style editor.
+- /documentation/features/evals/experiments-v2 — Experiments V2 (Beta) — Run repeatable evaluations over a dataset using Prompt, Completion, or Custom workflows.
+- /documentation/features/evals/quickstart — Quickstart
+- /documentation/features/evals/testsets — Testsets — Create and manage test cases for evaluating prompts.
+
+## Documentation > Features
+- /documentation/features/features_sop — Feature Name — One sentence description (50-160 chars)
+
+## Documentation > Features > Gateway
+- /documentation/features/gateway/advanced-configuration — Advanced — Advanced configuration for the Respan LLM Gateway — models, traffic management, caching, and more.
+- /documentation/features/gateway/quickstart — Quickstart
+- /documentation/features/gateway/setup — Setup — Choose a model and integrate the Respan LLM Gateway with your preferred SDK.
+
+## Documentation > Features > Mcp
+- /documentation/features/mcp/docs-mcp — Docs MCP — Access Respan documentation directly from your AI coding assistant using MCP
+- /documentation/features/mcp/platform-mcp — Platform MCP — Access Respan logs, traces, prompts, and customer data from your AI coding assistant using MCP
+
+## Documentation > Features > Monitoring
+- /documentation/features/monitoring/automations/quickstart — Monitoring — This is a guide for you to create a automation on the platform.
+- /documentation/features/monitoring/automations/quickstart_online_eval — Online evals — This is a guide for you to set up an online evals automation on the platform.
+- /documentation/features/monitoring/metrics — Metrics — A guide to view LLM usage metrics and user analytics
+- /documentation/features/monitoring/notifications/subscribe_alerts — Alerts & Warnings — Subscribe to system status and get notified when an LLM outage is detected.
+- /documentation/features/monitoring/notifications/webhooks — Webhooks
+- /documentation/features/monitoring/views — Views — Save filters from Logs, Traces, Users, Prompts, and more as reusable views for quick access and sharing.
+
+## Documentation > Features > Prompt Management
+- /documentation/features/prompt-management/manage-prompts — Advanced — Prompt schema, variables, composition, structured output, and deployment options for prompt templates.
+- /documentation/features/prompt-management/quickstart — Quickstart
+
+## Documentation > Features > Tracing
+- /documentation/features/tracing/logs/custom_model — Custom model — Create custom model and track their usage
+- /documentation/features/tracing/logs/export_logs — Export spans — Export your LLM spans to CSV or JSON for external analysis.
+- /documentation/features/tracing/logs/log-content-types — Span types — How to span log different types of LLM interactions — chat completions, embeddings, tool calls, audio, and more.
+- /documentation/features/tracing/logs/log-parameters — Span fields & parameters — Key span fields for tracking users, conversations, and custom properties — plus how to pass them.
+- /documentation/features/tracing/logs/quickstart — Quickstart
+- /documentation/features/tracing/logs/save_log_to_prompt — Save span as prompt — Convert LLM spans into reusable prompts with one click for testing, iteration, and deployment
+- /documentation/features/tracing/traces/integration-frameworks — Integration frameworks — Pre-built integrations to add Respan tracing to popular AI frameworks.
+- /documentation/features/tracing/traces/manual-ingestion — Manual ingestion — Send traces to Respan via the OTLP endpoint or the JSON ingestion API.
+- /documentation/features/tracing/traces/quickstart — Quickstart
+- /documentation/features/tracing/traces/span-parameters — Tracing parameters — Attach metadata, customer identifiers, and other parameters to your spans — same fields as log parameters, passed through your tracing setup.
+- /documentation/features/tracing/traces/tracing-sdk — Tracing SDK — Detailed features of the Respan tracing SDK — decorators, class-based workflows, and overriding span input/output.
+
+## Documentation > Features > User Analytics
+- /documentation/features/user-analytics/customer-identifier — Users — Track per-user metrics, set budgets, and apply rate limits to your LLM users.
+
+## Documentation > Getting Started
+- /documentation/getting-started/ask-ai — Ask AI — Get AI-assisted help building with Respan using MCP servers
+- /documentation/getting-started/overview — Overview — Respan is a full-stack LLM engineering platform for developers and PMs.
+- /documentation/getting-started/workflow — Workflow — A step-by-step guide to building reliable AI products with Respan.
+
+## Documentation > Getting Started > Quickstart
+- /documentation/getting-started/quickstart/evaluate-workflow — Evaluate & optimize — Test, score, and improve your AI system
+- /documentation/getting-started/quickstart/evaluation — Quickstart — Evaluate and improve your LLM applications with automated testing and scoring
+- /documentation/getting-started/quickstart/gateway — Quickstart — Respan AI gateway supports you call 250+ LLMs using the same input/output format.
+- /documentation/getting-started/quickstart/logging — Quickstart — Send your LLM spans to Respan and monitor them in real-time
+- /documentation/getting-started/quickstart/prompt_management — Quickstart — Create, deploy, and use your first prompt in minutes.
+- /documentation/getting-started/quickstart/prompt-gateway-workflow — Prompt & gateway — Manage prompts and route traffic through the AI gateway
+- /documentation/getting-started/quickstart/tracing — Quickstart — Get your first trace in Respan in 5 minutes.
+- /documentation/getting-started/quickstart/tracing-workflow — Trace & monitor — Observe your AI system end to end
+
+## Documentation > Resources > Cookbooks
+- /documentation/resources/cookbooks/ab-test-prompts — A/B test prompts in production — Use prompt versioning and customer segmentation to compare prompt performance on live traffic.
+- /documentation/resources/cookbooks/anthropic-structure-output — How to structure LLM output with Anthropic models
+- /documentation/resources/cookbooks/end-to-end-production — End-to-end: from first API call to production monitoring — Full walkthrough combining gateway, tracing, evaluation, and automation with real code.
+- /documentation/resources/cookbooks/eval-pipeline-from-logs — Build an eval pipeline from production logs — Curate failing logs into a dataset, create evaluators, run experiments, and deploy the winner.
+- /documentation/resources/cookbooks/filters-in-jinja — Filters in Jinja templates — Learn how to use filters in Jinja.
+- /documentation/resources/cookbooks/gepa-prompt-optimization — GEPA: self-improving prompt optimization — A Generate-Evaluate-Promote-Analyze loop for systematically improving prompts with data.
+- /documentation/resources/cookbooks/migrate-to-multi-model — Migrate from OpenAI to multi-model — Switch between LLM providers through the Respan gateway with fallbacks and cost comparison.
+- /documentation/resources/cookbooks/monitor-ai-agent — Monitor an AI agent in production — Trace a multi-step agent, set up online evaluation, and alert on quality drops.
+- /documentation/resources/cookbooks/trace-rag-pipeline — Trace a RAG pipeline — Build a retrieval-augmented generation pipeline with full tracing to debug each step.
+- /documentation/resources/cookbooks/track-cost-per-feature — Track cost per feature — Use metadata and customer identifiers to build per-feature and per-user cost breakdowns.
+
+## Documentation > Resources
+- /documentation/resources/observability-data-model — Data model — Understanding the core concepts behind Respan's observability features
+
+## Documentation > Resources > Reference
+- /documentation/resources/reference/api-rate-limits — API rate limits — Learn about rate limits for Respan API endpoints and how to handle them.
+- /documentation/resources/reference/data_model — Data model — Understanding how Respan organizes and presents your LLM data
+- /documentation/resources/reference/error-handling — Error handling
+- /documentation/resources/reference/span-fields — Span fields — Complete reference of every field available on a span record.
+
+## Documentation > Security
+- /documentation/security/architecture_review — Architecture — Respan security architecture, infrastructure, and frequently asked questions
+- /documentation/security/gdpr — GDPR — Respan GDPR compliance and data protection
+- /documentation/security/hipaa — HIPAA — Respan HIPAA compliance information and requirements
+- /documentation/security/security-qa — Security FAQ — Frequently asked questions about Respan's security practices and compliance
+- /documentation/security/socii — SOC II — Respan SOC 2 compliance
+- /documentation/security/trust_center — Trust center — Respan Trust Center - Security & Privacy Information
+
+## Documentation > Support
+- /documentation/support/feedback — Feedback — Help us improve our documentation
+- /documentation/support/status — Status — Real-time status of Respan services
+- /documentation/support/support — Support — Get help and connect with the Respan community
+
+## Enterprise
+- /enterprise/enterprise — Enterprise platform guide
+
+## Integrations > Dev Tools
+- /integrations/dev-tools/assemblyai — AssemblyAI — A guide to call and log AssemblyAI speech-to-text model with Respan gateway.
+- /integrations/dev-tools/claude-code — Claude Code — Trace your Claude Code (Anthropic CLI) conversations with Respan for full observability into thinking, tool calls, and agent workflows.
+- /integrations/dev-tools/cognee — Cognee — LLM observability for AI memory with Respan and Cognee
+- /integrations/dev-tools/cursor — Cursor — Trace your Cursor AI agent conversations with Respan for full observability into thinking, tool calls, and responses.
+- /integrations/dev-tools/hyperspell — Hyperspell — A guide to integrating Hyperspell with Respan.
+- /integrations/dev-tools/linkup — Linkup — Linkup is an AI dev tool that helps you connect your code with your LLM. It’s a platform that allows you to connect your code with your LLM and get observability.
+- /integrations/dev-tools/mem0 — Mem0 — A guide to integrating Mem0 with Respan.
+- /integrations/dev-tools/moda — Moda — Moda is a product analytics platform that helps you understand user behavior. Connect Moda with Respan to monitor your LLM performance and get observability.
+- /integrations/dev-tools/posthog — PostHog — PostHog is an open-source product analytics platform, you can monitor your product traffic and user sessions with PostHog. Now you can connect PostHog with Respan to monitor your LLM performance and get observability.
+- /integrations/dev-tools/zapier — Zapier
+
+## Integrations > Gateway
+- /integrations/gateway/anthropic — Anthropic — Use Anthropic SDK through Respan
+- /integrations/gateway/anthropic-agents-sdk — Claude Agent SDK — Route Claude Agent SDK calls through the Respan gateway.
+- /integrations/gateway/baml — BAML — Route BAML structured output calls through the Respan gateway.
+- /integrations/gateway/google_genai — Google Gen AI — Use Google Gen AI SDK with Respan
+- /integrations/gateway/haystack — Haystack — Route Haystack pipeline LLM calls through the Respan gateway.
+- /integrations/gateway/integration_sop — Gateway Integration SOP — Standard template for LLM SDK / gateway integration pages.
+- /integrations/gateway/langchain — LangChain — Use LangChain with Respan
+- /integrations/gateway/litellm — LiteLLM — Use LiteLLM with Respan for gateway access and logging.
+- /integrations/gateway/llama-index — LlamaIndex — Use LlamaIndex through Respan
+- /integrations/gateway/openai-agents-sdk — OpenAI Agents SDK — Route OpenAI Agents SDK calls through the Respan gateway.
+- /integrations/gateway/respan-api — Respan API — Route LLM calls through the Respan gateway using the API directly.
+- /integrations/gateway/ruby_llm — RubyLLM — Use RubyLLM with Respan for gateway access and observability.
+- /integrations/gateway/vercel — Vercel AI SDK — Route AI SDK (Vercel) calls through the Respan gateway.
+
+## Integrations > Gateway > Openai
+- /integrations/gateway/openai/openai-responses — Responses API — A guide to integrating the OpenAI Responses API with Respan.
+- /integrations/gateway/openai/openai-sdk — OpenAI SDK — Route LLM requests through the Respan gateway using the OpenAI SDK.
+
+## Integrations
+- /integrations/overview — Overview — Integrate Respan with your LLM stack — tracing, gateway, and dev tools.
+
+## Integrations > Providers
+- /integrations/providers/ai21labs — AI21 Labs — Use your own AI21 Labs credits through Respan
+- /integrations/providers/anthropic — Anthropic — Route Anthropic model calls through Respan Gateway and track requests.
+- /integrations/providers/azure — Azure OpenAI — Use your own Azure OpenAI credits through Respan
+- /integrations/providers/baseten — Baseten — Use your own Baseten credits through Respan
+- /integrations/providers/bedrock — AWS Bedrock — Use your own AWS credits through Respan
+- /integrations/providers/cohere — Cohere — Use your own Cohere credits through Respan
+- /integrations/providers/custom — Custom Provider — Set up a custom or self-hosted LLM provider with the Respan gateway.
+- /integrations/providers/deepseek — DeepSeek — Use your own DeepSeek credits through Respan
+- /integrations/providers/fireworks — Fireworks AI — Route Fireworks AI model calls through Respan Gateway using your own Fireworks credits.
+- /integrations/providers/gemini — Google Gemini — Use your own Gemini credits through Respan
+- /integrations/providers/groq — Groq — Route Groq model calls through Respan Gateway using your own Groq credits.
+- /integrations/providers/inference — Inference — Use your own Inference credits through Respan
+- /integrations/providers/mistral — Mistral — Use your own Mistral credits through Respan
+- /integrations/providers/moonshot — Moonshot — Use your own Moonshot credits through Respan
+- /integrations/providers/nebius — Nebius AI
+- /integrations/providers/nextbit — Nextbit — Use your own Nextbit credits through Respan
+- /integrations/providers/novita — Novita AI
+- /integrations/providers/openai — OpenAI — Route OpenAI model calls through Respan Gateway and track requests.
+- /integrations/providers/openrouter — OpenRouter — Route OpenRouter model calls through Respan Gateway using your own OpenRouter credits.
+- /integrations/providers/parasail — Parasail — Use your own Parasail credits through Respan
+- /integrations/providers/perplexity — Perplexity AI — Use your own Perplexity AI credits through Respan
+- /integrations/providers/reducto — Reducto — Use your own Reducto credits through Respan
+- /integrations/providers/replicate — Replicate — Use your own Replicate credits through Respan
+- /integrations/providers/together — Together AI — Route Together AI model calls through Respan Gateway using your own Together AI credits.
+- /integrations/providers/vertex — Google Vertex AI — Use your own Vertex AI credits through Respan
+- /integrations/providers/xAI — xAI — Use your own xAI credits through Respan
+
+## Integrations > Tracing
+- /integrations/tracing/agno — Agno — Trace Agno AI agent workflows with Respan.
+- /integrations/tracing/anthropic-agents-sdk — Claude Agent SDK — Trace Claude Agent SDK workflows, tool calls, and sub-agents with Respan.
+- /integrations/tracing/anthropic-agents-sdk-review — anthropic-agents-sdk-review
+- /integrations/tracing/baml — BAML — Trace BAML structured outputs with Respan.
+- /integrations/tracing/braintrust — Braintrust — Send Braintrust logs and spans to Respan for tracing.
+- /integrations/tracing/haystack — Haystack — Trace Haystack pipelines with Respan.
+- /integrations/tracing/instructor — Instructor — Trace Instructor structured LLM outputs with Respan.
+- /integrations/tracing/langfuse — Langfuse — Redirect Langfuse traces to Respan with OTEL instrumentation.
+- /integrations/tracing/langgraph — LangGraph — Trace LangGraph stateful agent workflows with Respan.
+- /integrations/tracing/mastra — Mastra — Trace Mastra AI agent workflows with Respan.
+- /integrations/tracing/openai-agents-sdk — OpenAI Agents SDK — Trace OpenAI Agents SDK workflows, tool calls, and handoffs with Respan.
+- /integrations/tracing/opentelemetry — OpenTelemetry — Send traces from any OpenTelemetry-instrumented application to Respan.
+- /integrations/tracing/respan-native — Respan — Trace your LLM workflows using the Respan tracing SDK.
+- /integrations/tracing/superagent — Superagent — Trace Superagent safety operations (guard, redact, scan, test) with Respan.
+- /integrations/tracing/tracing_integration_sop — Tracing Integration SOP — Standard template for tracing integration pages.
+- /integrations/tracing/vercel-tracing — Vercel AI SDK — Trace AI SDK (Vercel) calls with Respan.
+
+## README
+- /README — README
+
+## Sdks > Python > Exporters
+- /sdks/python/exporters/agno — Agno Exporter — SDK reference for the Respan Agno exporter.
+- /sdks/python/exporters/anthropic-agents — Anthropic Agents Exporter — SDK reference for the Respan Anthropic Agents exporter for Python.
+- /sdks/python/exporters/braintrust — Braintrust Exporter — SDK reference for the Respan Braintrust exporter.
+- /sdks/python/exporters/haystack — Haystack Exporter — SDK reference for the Respan Haystack exporter components.
+- /sdks/python/exporters/langfuse — Langfuse Instrumentor — SDK reference for the Respan Langfuse instrumentor.
+- /sdks/python/exporters/litellm — LiteLLM Exporter — SDK reference for the Respan LiteLLM callback exporter.
+- /sdks/python/exporters/openai-agents — OpenAI Agents Exporter — SDK reference for the Respan OpenAI Agents exporter for Python.
+- /sdks/python/exporters/superagent — Superagent Exporter — SDK reference for the Respan Superagent exporter.
+
+## Sdks > Python > Tracing
+- /sdks/python/tracing/client/add-event — add_event() — Add a timestamped event to the current span.
+- /sdks/python/tracing/client/export-spans — process_spans() — Process collected spans through the processor pipeline.
+- /sdks/python/tracing/client/flush — flush() — Force flush all pending spans to exporters.
+- /sdks/python/tracing/client/get-client — get_client() — Get the RespanClient for span and trace operations.
+- /sdks/python/tracing/client/get-context-value — get_context_value() — Read a value from the current OpenTelemetry context.
+- /sdks/python/tracing/client/get-current-span-id — get_current_span_id() — Return the active span ID as a hex string.
+- /sdks/python/tracing/client/get-current-trace-id — get_current_trace_id() — Return the active trace ID as a hex string.
+- /sdks/python/tracing/client/get-span-buffer — get_span_buffer() — Buffer spans in a context for manual batch collection and export.
+- /sdks/python/tracing/client/get-tracer — get_tracer() — Access the OpenTelemetry tracer for manual span creation.
+- /sdks/python/tracing/client/is-recording — is_recording() — Check if the current span is actively recording.
+- /sdks/python/tracing/client/record-exception — record_exception() — Record an exception on the current span and set error status.
+- /sdks/python/tracing/client/set-context-value — set_context_value() — Set a value in the current OpenTelemetry context.
+- /sdks/python/tracing/client/update-current-span — update_current_span() — Update name, status, attributes, and Respan params on the current span.
+- /sdks/python/tracing/contexts/respan-span-attributes — respan_span_attributes() — Context manager to attach Respan-specific attributes to spans.
+- /sdks/python/tracing/decorators/agent — @agent — Mark a function or class as a traced agent span.
+- /sdks/python/tracing/decorators/task — @task — Trace a single operation within a workflow as a child span.
+- /sdks/python/tracing/decorators/tool — @tool — Trace a tool execution within an agent or workflow.
+- /sdks/python/tracing/decorators/workflow — @workflow — Mark a function or class as a traced workflow (root span).
+- /sdks/python/tracing/examples — Examples — Real-world examples using the respan-tracing Python SDK.
+- /sdks/python/tracing/instrumentation/overview — Instrumentation — Auto-instrument supported LLM providers, vector databases, and frameworks.
+- /sdks/python/tracing/main/initialize — RespanTelemetry — Initialize the tracing SDK and configure exporters, instrumentation, and processing.
+- /sdks/python/tracing/overview — Python Tracing SDK — Observe and debug LLM workflows using the respan-tracing Python SDK.
+- /sdks/python/tracing/quickstart — Quickstart — Get started with the respan-tracing Python SDK in under 5 minutes.
+
+## Sdks > Typescript > Exporters
+- /sdks/typescript/exporters/anthropic-agents — Anthropic Agents Exporter — SDK reference for the Respan Anthropic Agents exporter for TypeScript.
+- /sdks/typescript/exporters/openai-agents — OpenAI Agents Exporter — SDK reference for the Respan OpenAI Agents exporter for TypeScript.
+- /sdks/typescript/exporters/vercel — Vercel AI Exporter — SDK reference for the Respan Vercel AI exporter.
+
+## Sdks > Typescript > Tracing
+- /sdks/typescript/tracing/client/add-span-event — addSpanEvent() — Add a timestamped event to the current span
+- /sdks/typescript/tracing/client/flush — flush() — Manually flush pending spans to Respan
+- /sdks/typescript/tracing/client/get-client — getClient() — Access the Respan client for span and trace operations
+- /sdks/typescript/tracing/client/get-context-value — getContextValue() — Get a value from the trace context by key
+- /sdks/typescript/tracing/client/get-current-span-id — getCurrentSpanId() — Get the current span ID
+- /sdks/typescript/tracing/client/get-current-trace-id — getCurrentTraceId() — Get the current trace ID
+- /sdks/typescript/tracing/client/get-tracer — getTracer() — Get the underlying OpenTelemetry tracer instance
+- /sdks/typescript/tracing/client/initialize — initialize() — Initialize the Respan telemetry client
+- /sdks/typescript/tracing/client/is-recording — isRecording() — Check if tracing is currently active
+- /sdks/typescript/tracing/client/record-span-exception — recordSpanException() — Record an error or exception on the current span
+- /sdks/typescript/tracing/client/set-context-value — setContextValue() — Set a value in the trace context by key
+- /sdks/typescript/tracing/client/shutdown — shutdown() — Gracefully shutdown the tracing client and flush all pending spans
+- /sdks/typescript/tracing/client/update-current-span — updateCurrentSpan() — Update name, status, attributes, and Respan params on the current span
+- /sdks/typescript/tracing/configuration/respan-params — Respan Parameters — Understanding Respan-specific span parameters for filtering and metadata
+- /sdks/typescript/tracing/examples — Examples — Real TypeScript examples from the respan-example-projects repository
+- /sdks/typescript/tracing/instrumentation/overview — Automatic Instrumentation — Auto-instrument popular libraries like OpenAI and Anthropic
+- /sdks/typescript/tracing/methods/with-agent — withAgent() — Wrap an async function as a traced agent
+- /sdks/typescript/tracing/methods/with-task — withTask() — Wrap an async function as a traced task
+- /sdks/typescript/tracing/methods/with-tool — withTool() — Wrap an async function as a traced tool
+- /sdks/typescript/tracing/methods/with-workflow — withWorkflow() — Wrap an async function as a traced workflow
+- /sdks/typescript/tracing/quickstart — Quickstart — Get started with the @respan/tracing TypeScript SDK
+
+## Yc
+- /yc/alum-deal — Redeem the YC deal: Alumni
+- /yc/current-batch-deal — Redeem the YC deal: F25/W26

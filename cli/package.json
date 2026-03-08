@@ -1,0 +1,52 @@
+{
+  "name": "@respan/cli",
+  "version": "0.3.0",
+  "description": "Respan CLI - manage your LLM observability from the command line",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "respan": "./bin/run.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "dev": "node --loader ts-node/esm bin/dev.js",
+    "postpack": "rm -f oclif.manifest.json",
+    "prepack": "npm run build && oclif manifest"
+  },
+  "oclif": {
+    "bin": "respan",
+    "dirname": "respan",
+    "commands": {
+      "strategy": "pattern",
+      "target": "./dist/commands"
+    },
+    "plugins": [
+      "@oclif/plugin-help",
+      "@oclif/plugin-not-found",
+      "@oclif/plugin-autocomplete"
+    ],
+    "topicSeparator": " "
+  },
+  "dependencies": {
+    "@oclif/core": "^4",
+    "@oclif/plugin-help": "^6",
+    "@oclif/plugin-not-found": "^3",
+    "@oclif/plugin-autocomplete": "^3",
+    "@respan/respan-api": "^0.0.3",
+    "@inquirer/prompts": "^7"
+  },
+  "devDependencies": {
+    "oclif": "^4",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "oclif.manifest.json"
+  ]
+}
