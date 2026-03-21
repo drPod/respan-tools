@@ -6,11 +6,14 @@ Sends Gemini CLI LLM call data to Respan after each model response.
 Uses Gemini CLI's AfterModel hook to capture request/response and forward
 to Respan's JSON API.
 
+Handles streaming: Gemini fires AfterModel per chunk. We accumulate text
+and only send on the final chunk (empty text with completion tokens).
+
 Configuration via environment variables (set in .gemini/.env):
     RESPAN_API_KEY          - Respan API key (required)
     RESPAN_BASE_URL         - Respan API base URL (default: https://api.respan.ai)
     RESPAN_PROJECT_ID       - Respan project ID
-    RESPAN_GEMINI_MODEL     - Override model name (default: auto-detect from session)
+    RESPAN_GEMINI_MODEL     - Override model name (default: auto-detect)
     CC_RESPAN_DEBUG         - Enable debug logging (set to "true")
     CC_RESPAN_MAX_CHARS     - Max chars for input/output (default: 4000)
 """
@@ -18,7 +21,7 @@ Configuration via environment variables (set in .gemini/.env):
 import json
 import os
 import sys
-import time
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -26,7 +29,8 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 # Configuration
-LOG_FILE = Path.home() / ".gemini" / "state" / "respan_hook.log"
+STATE_DIR = Path.home() / ".gemini" / "state"
+LOG_FILE = STATE_DIR / "respan_hook.log"
 DEBUG = os.environ.get("CC_RESPAN_DEBUG", "").lower() == "true"
 
 try:
@@ -71,56 +75,63 @@ def get_config() -> Optional[Dict[str, str]]:
         "api_key": api_key,
         "base_url": os.environ.get("RESPAN_BASE_URL", "https://api.respan.ai").rstrip("/"),
         "project_id": os.environ.get("RESPAN_PROJECT_ID", ""),
-        "model_override": os.environ.get("RESPAN_GEMINI_MODEL", ""),
     }
 
+
+# ── Streaming accumulator ────────────────────────────────────────
+
+def _state_path(session_id: str) -> Path:
+    """Temp file to accumulate streamed text across hook invocations."""
+    safe_id = session_id.replace("/", "_").replace("\\", "_")[:64]
+    return STATE_DIR / f"respan_stream_{safe_id}.json"
+
+
+def load_stream_state(session_id: str) -> Dict[str, Any]:
+    p = _state_path(session_id)
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            pass
+    return {"accumulated_text": "", "last_tokens": 0}
+
+
+def save_stream_state(session_id: str, state: Dict[str, Any]) -> None:
+    p = _state_path(session_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(state))
+
+
+def clear_stream_state(session_id: str) -> None:
+    p = _state_path(session_id)
+    try:
+        p.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+# ── Data extraction ───────────────────────────────────────────────
 
 def extract_input(hook_data: Dict[str, Any]) -> str:
-    """Extract input text from hook data."""
+    """Extract input from hook data — full conversation as JSON."""
     llm_req = hook_data.get("llm_request", {})
     messages = llm_req.get("messages", [])
-    # Get the last user message as input
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            return truncate(msg.get("content", ""))
-    # Fall back to all messages as JSON
     if messages:
-        return truncate(json.dumps(messages, ensure_ascii=False))
+        formatted = []
+        for msg in messages:
+            formatted.append({
+                "role": msg.get("role", "user"),
+                "content": truncate(msg.get("content", "")),
+            })
+        return json.dumps(formatted, ensure_ascii=False)
     return ""
-
-
-def extract_output(hook_data: Dict[str, Any]) -> str:
-    """Extract output text from hook data."""
-    llm_resp = hook_data.get("llm_response", {})
-    text = llm_resp.get("text", "")
-    if text:
-        return truncate(text)
-    # Fall back to candidate content
-    candidates = llm_resp.get("candidates", [])
-    if candidates:
-        parts = candidates[0].get("content", {}).get("parts", [])
-        if parts:
-            return truncate(" ".join(parts))
-    return ""
-
-
-def extract_tokens(hook_data: Dict[str, Any]) -> Dict[str, int]:
-    """Extract token usage from hook data."""
-    usage = hook_data.get("llm_response", {}).get("usageMetadata", {})
-    return {
-        "prompt_tokens": usage.get("promptTokenCount", 0) or 0,
-        "completion_tokens": usage.get("candidatesTokenCount", 0) or 0,
-        "total_tokens": usage.get("totalTokenCount", 0) or 0,
-    }
 
 
 def detect_model(hook_data: Dict[str, Any]) -> str:
     """Detect the model from hook data or environment."""
-    # Check environment override
     override = os.environ.get("RESPAN_GEMINI_MODEL", "")
     if override:
         return override
-    # Get from llm_request (Gemini CLI includes this)
     llm_req = hook_data.get("llm_request", {})
     model = llm_req.get("model", "")
     if model:
@@ -128,22 +139,19 @@ def detect_model(hook_data: Dict[str, Any]) -> str:
     return "gemini-cli"
 
 
-def send_to_respan(config: Dict[str, str], hook_data: Dict[str, Any]) -> None:
+def send_to_respan(config: Dict[str, str], hook_data: Dict[str, Any], output_text: str, tokens: Dict[str, int]) -> None:
     """Send span data to Respan via JSON API."""
     input_text = extract_input(hook_data)
-    output_text = extract_output(hook_data)
-    tokens = extract_tokens(hook_data)
     model = detect_model(hook_data)
     timestamp = hook_data.get("timestamp", datetime.now(timezone.utc).isoformat())
     session_id = hook_data.get("session_id", "")
 
-    # Build the request/config for metadata
     llm_req = hook_data.get("llm_request", {})
     req_config = llm_req.get("config", {})
 
     body: Dict[str, Any] = {
         "input": input_text,
-        "output": output_text,
+        "output": truncate(output_text),
         "model": model,
         "log_type": "chat",
         "usage": tokens,
@@ -165,24 +173,13 @@ def send_to_respan(config: Dict[str, str], hook_data: Dict[str, Any]) -> None:
     if config.get("project_id"):
         body["metadata"]["respan.project_id"] = config["project_id"]
 
-    # Build messages for input (full conversation)
-    messages = llm_req.get("messages", [])
-    if messages:
-        formatted = []
-        for msg in messages:
-            formatted.append({
-                "role": msg.get("role", "user"),
-                "content": truncate(msg.get("content", "")),
-            })
-        body["input"] = json.dumps(formatted, ensure_ascii=False)
-
     url = f"{config['base_url']}/api/request-logs/"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config['api_key']}",
     }
 
-    debug(f"Sending to {url}: model={model}, tokens={tokens}")
+    debug(f"Sending to {url}: model={model}, tokens={tokens}, output_len={len(output_text)}")
 
     data = json.dumps(body).encode("utf-8")
     req = Request(url, data=data, headers=headers, method="POST")
@@ -199,20 +196,45 @@ def main():
     try:
         raw = sys.stdin.read()
         if not raw.strip():
-            debug("Empty stdin, exiting")
+            print("{}")
             return
 
         hook_data = json.loads(raw)
-        debug(f"Hook event: {hook_data.get('hook_event_name', 'unknown')}")
+        session_id = hook_data.get("session_id", "unknown")
 
-        config = get_config()
-        if not config:
-            debug("No Respan API key found, skipping")
-            return
+        # Extract current chunk data
+        llm_resp = hook_data.get("llm_response", {})
+        chunk_text = llm_resp.get("text", "") or ""
+        usage = llm_resp.get("usageMetadata", {})
+        completion_tokens = usage.get("candidatesTokenCount", 0) or 0
 
-        send_to_respan(config, hook_data)
+        # Load accumulated state
+        state = load_stream_state(session_id)
 
-        # Output empty JSON to not interfere with Gemini's processing
+        if chunk_text:
+            # Non-empty chunk: accumulate text
+            state["accumulated_text"] += chunk_text
+            state["last_tokens"] = completion_tokens
+            save_stream_state(session_id, state)
+            debug(f"Accumulated chunk: +{len(chunk_text)} chars, total={len(state['accumulated_text'])}")
+        elif completion_tokens > 0 and state["accumulated_text"]:
+            # Empty text + has completion tokens + we have accumulated text = final chunk
+            debug(f"Final chunk detected, sending accumulated response ({len(state['accumulated_text'])} chars)")
+
+            config = get_config()
+            if config:
+                tokens = {
+                    "prompt_tokens": usage.get("promptTokenCount", 0) or 0,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": usage.get("totalTokenCount", 0) or 0,
+                }
+                send_to_respan(config, hook_data, state["accumulated_text"], tokens)
+
+            clear_stream_state(session_id)
+        else:
+            # Initial empty chunk (no tokens yet) — skip
+            debug("Initial chunk (no completion tokens yet), skipping")
+
         print("{}")
 
     except json.JSONDecodeError as e:
