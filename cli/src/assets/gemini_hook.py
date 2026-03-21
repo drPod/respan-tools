@@ -17,13 +17,14 @@ Configuration:
 
 import json
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.request import Request, urlopen
-from urllib.error import URLError
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None
 
 # Configuration
 STATE_DIR = Path.home() / ".gemini" / "state"
@@ -156,52 +157,28 @@ def clear_stream_state(session_id: str) -> None:
 
 def extract_messages(
     hook_data: Dict[str, Any],
-) -> Tuple[List[Dict[str, str]], Optional[str]]:
-    """Extract prompt_messages and session context from hook data.
+) -> List[Dict[str, str]]:
+    """Extract prompt_messages from hook data.
 
-    Gemini CLI injects a <session_context> block into the first user message
-    containing workspace dirs, directory structure, OS info, etc. We strip it
-    out so traces show clean user intent, and return it separately for metadata.
-
-    Returns (messages, session_context).
+    Preserves all content including Gemini CLI's <session_context> block
+    for full trace fidelity.
     """
     llm_req = hook_data.get("llm_request", {})
     messages = llm_req.get("messages", [])
     formatted = []
-    session_context: Optional[str] = None
+
+    # Gemini uses "model" for assistant messages — map to standard roles
+    role_map = {"model": "assistant"}
 
     for msg in messages:
-        role = msg.get("role", "user")
+        role = role_map.get(msg.get("role", "user"), msg.get("role", "user"))
         content = msg.get("content", "")
-
-        # Check for <session_context> in user messages (Gemini CLI injects this)
-        if role == "user" and session_context is None and "<session_context>" in content:
-            match = re.search(
-                r"<session_context>(.*?)</session_context>",
-                content,
-                re.DOTALL,
-            )
-            if match:
-                session_context = match.group(1).strip()
-                # Remove the session_context block from the message content
-                cleaned = re.sub(
-                    r"<session_context>.*?</session_context>\s*",
-                    "",
-                    content,
-                    count=1,
-                    flags=re.DOTALL,
-                ).strip()
-                # If the message was entirely session context, skip it
-                if not cleaned:
-                    continue
-                content = cleaned
-
         formatted.append({
             "role": role,
             "content": truncate(content),
         })
 
-    return formatted, session_context
+    return formatted
 
 
 def detect_model(hook_data: Dict[str, Any]) -> str:
@@ -241,20 +218,20 @@ def build_spans(
     except (ValueError, TypeError):
         pass
 
-    # Messages — session context stripped for cleaner traces
-    prompt_messages, _session_context = extract_messages(hook_data)
+    # Messages — session context preserved for trace fidelity
+    prompt_messages = extract_messages(hook_data)
     completion_message: Dict[str, str] = {"role": "assistant", "content": truncate(output_text)}
 
     # Config overrides from respan.json
     cfg_fields = (config or {}).get("fields", {})
     cfg_props = (config or {}).get("properties", {})
 
-    # IDs
-    trace_unique_id = f"geminicli_{session_id}_{end_time}"
-    span_unique_id = f"geminicli_{trace_unique_id}_gen"
+    # IDs — keep short to avoid DB column truncation
+    trace_unique_id = f"gcli_{session_id}"
+    span_unique_id = f"gcli_{session_id}_gen"
     workflow_name = os.environ.get("RESPAN_WORKFLOW_NAME") or cfg_fields.get("workflow_name") or "gemini-cli"
     span_name = os.environ.get("RESPAN_SPAN_NAME") or cfg_fields.get("span_name") or "gemini.chat"
-    thread_id = f"geminicli_{session_id}"
+    thread_id = f"gcli_{session_id}"
     customer_id = os.environ.get("RESPAN_CUSTOMER_ID") or cfg_fields.get("customer_id") or ""
 
     # LLM config
@@ -310,11 +287,23 @@ def build_spans(
     if req_config.get("maxOutputTokens") is not None:
         span["max_tokens"] = req_config["maxOutputTokens"]
 
-    # Platform defaults
-    span["respan_params"] = {
-        "has_webhook": False,
-        "environment": os.environ.get("RESPAN_ENVIRONMENT", "prod"),
+    # Platform defaults (must match Claude Code / Codex hooks exactly)
+    respan_defaults = {
+        "warnings": "",
+        "encoding_format": "float",
+        "disable_fallback": False,
+        "respan_params": {
+            "has_webhook": False,
+            "environment": os.environ.get("RESPAN_ENVIRONMENT", "prod"),
+        },
+        "field_name": "data: ",
+        "delimiter": "\n\n",
+        "disable_log": False,
+        "request_breakdown": False,
     }
+    for key, value in respan_defaults.items():
+        if key not in span:
+            span[key] = value
 
     return [span]
 
@@ -326,25 +315,38 @@ def send_spans(
     api_key: str,
     base_url: str,
 ) -> None:
-    """Send spans to Respan via trace ingest endpoint (matching claude-code/codex)."""
+    """Send spans to Respan as a single batch via /v1/traces/ingest (array format).
+
+    Uses subprocess curl to avoid a hard dependency on the ``requests`` library.
+    """
     url = f"{base_url}/v1/traces/ingest"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
 
     span_names = [s.get("span_name", "?") for s in spans]
-    debug(f"Sending {len(spans)} spans to {url}: {span_names}")
+    debug(f"Sending {len(spans)} span(s) to {url}: {span_names}")
 
-    data = json.dumps(spans).encode("utf-8")
-    req = Request(url, data=data, headers=headers, method="POST")
+    if DEBUG:
+        debug_file = STATE_DIR / "respan_last_payload.json"
+        debug_file.write_text(json.dumps(spans, indent=2), encoding="utf-8")
+
+    # Write payload to temp file and launch a fully independent sender process.
+    # This avoids Gemini CLI killing the HTTP request mid-flight.
+    import subprocess
+    payload_file = STATE_DIR / f"respan_send_{os.getpid()}.json"
+    payload_file.write_text(json.dumps(spans), encoding="utf-8")
+
+    sender = Path.home() / ".respan" / "send_spans.py"
     try:
-        with urlopen(req, timeout=10) as resp:
-            debug(f"Response: {resp.status}")
-    except URLError as e:
-        log("ERROR", f"Failed to send to Respan: {e}")
+        subprocess.Popen(
+            ["python3", str(sender), str(payload_file), api_key, url],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        debug("Launched sender subprocess")
     except Exception as e:
-        log("ERROR", f"Unexpected error: {e}")
+        log("ERROR", f"Failed to launch sender: {e}")
+        payload_file.unlink(missing_ok=True)
 
 
 def main():
@@ -393,6 +395,10 @@ def main():
             (not chunk_text) or is_finished
         )
 
+        # Print response immediately so Gemini CLI can proceed
+        print("{}")
+        sys.stdout.flush()
+
         if should_send:
             debug(f"Final chunk (finish_reason={finish_reason}), "
                   f"sending {len(state['accumulated_text'])} chars")
@@ -420,8 +426,6 @@ def main():
                 log("ERROR", "No API key found. Run: respan auth login")
 
             clear_stream_state(session_id)
-
-        print("{}")
 
     except json.JSONDecodeError as e:
         log("ERROR", f"Invalid JSON from stdin: {e}")
