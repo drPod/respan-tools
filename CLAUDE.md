@@ -51,7 +51,9 @@ curl -X POST "https://api.respan.ai/api/v1/traces/ingest" \
 
 - Gemini CLI fires `AfterModel` hook per streaming chunk
 - Hook accumulates text chunks in state files (`~/.gemini/state/`)
-- On final chunk (empty text or `finishReason=STOP`), sends complete response to Respan
+- Tool-call detection: Gemini CLI does NOT include `functionCall` parts in hook data. Instead, the hook detects tool calls via **message count changes** — when the model's pre-tool response is added to the messages array (role `"model"`), the hook knows a tool call happened and carries the accumulator.
+- Send strategy: `text+STOP` chunks send immediately (method b). Empty chunks use a **delayed sender** (default 10s, configurable via `GEMINI_RESPAN_SEND_DELAY`) with version-based cancellation — if new text arrives before the delay fires, the pending send is invalidated.
+- Also checks for `functionCall`/`toolCall` parts in candidates as a safety net for future Gemini CLI versions.
 - Send happens in a detached subprocess (Gemini CLI may kill the hook process after reading `{}`)
 - Auth: Gemini CLI injects `RESPAN_API_KEY` from `.gemini/.env` into hook env; falls back to `~/.respan/credentials.json`
 - Config: reads `~/.gemini/respan.json` for span name, customer ID, workflow name
@@ -71,7 +73,7 @@ These are minor config/metadata passthrough issues. Core tracing works correctly
 - **`RESPAN_METADATA` env var not applied**: Custom metadata from the `RESPAN_METADATA` env var is ignored; only `{"source": "gemini-cli"}` appears in metadata.
 - **Custom keys from `respan.json` not merged into metadata**: Only known fields (`customer_id`, `span_name`, `workflow_name`) are read from `~/.gemini/respan.json`; extra keys like `custom_tag` are dropped instead of being merged into span metadata.
 - **`llm_call_count` always 0**: Backend does not count Gemini spans as LLM calls. This is a backend issue, not a hook bug.
-- **Tool use breaks the accumulator (important)**: When Gemini makes a tool call mid-response (e.g., reading a file, running a shell command), the hook accumulates the initial text ("I will read CLAUDE.md...") but never receives a `finishReason=STOP` for that model turn. The tool execution produces a new model turn, but the original state file is orphaned in `~/.gemini/state/`. This means responses involving tool calls may produce no trace or an incomplete one. The `AfterModel` hook fires per streaming chunk — when a tool call happens, the model turn ends without a STOP, then Gemini CLI executes the tool and starts a new model turn. The hook needs to detect tool-call finish reasons and either: (a) send the accumulated text as a partial span, or (b) carry the accumulator across model turns within the same session.
+- **~~Tool use breaks the accumulator~~ (FIXED)**: The hook now detects tool calls via message count changes and uses a delayed sender with version-based cancellation. Text from before and after tool execution is combined into a single span. Tested with 7+ sequential tool turns. The `GEMINI_RESPAN_SEND_DELAY` env var (default 10s) controls the delay — increase for slow tools like web search.
 
 ### Testing
 
