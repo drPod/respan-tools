@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { BaseCommand } from '../../lib/base-command.js';
 import {
@@ -9,7 +10,7 @@ import {
   writeTextFile,
   expandHome,
   parseAttrs,
-  toOtelResourceAttrs,
+  getGeminiHookScript,
   resolveScope,
   findProjectRoot,
 } from '../../lib/integrate.js';
@@ -17,16 +18,16 @@ import {
 export default class IntegrateGeminiCli extends BaseCommand {
   static description = `Integrate Respan with Gemini CLI.
 
-Gemini CLI has native OTel traces (tool_call, llm_call, agent_call)
-so we configure it to send telemetry directly to the Respan OTLP
-endpoint.
+Installs an AfterModel hook that captures LLM request/response data
+and sends it to Respan as structured spans with model, token counts,
+and input/output.
 
 Scope:
   --global   Write to ~/.gemini/settings.json (default)
   --local    Write to .gemini/settings.json in project root
 
 Note: Gemini CLI ignores workspace-level telemetry settings, so
---global is the default. Use --local only for .env overrides.`;
+--global is the default.`;
 
   static examples = [
     'respan integrate gemini-cli',
@@ -52,49 +53,64 @@ Note: Gemini CLI ignores workspace-level telemetry settings, so
       const dryRun = flags['dry-run'];
       const scope = resolveScope(flags, 'global');
 
-      // Resolve target settings file
+      // ── 1. Install hook script ──────────────────────────────────
+      const hookPath = expandHome('~/.respan/gemini_hook.py');
+      if (dryRun) {
+        this.log(`[dry-run] Would write hook script to: ${hookPath}`);
+      } else {
+        writeTextFile(hookPath, getGeminiHookScript());
+        fs.chmodSync(hookPath, 0o755);
+        this.log(`Wrote hook script: ${hookPath}`);
+      }
+
+      // ── 2. Register AfterModel hook in settings.json ────────────
       const settingsPath = scope === 'global'
         ? expandHome('~/.gemini/settings.json')
         : path.join(findProjectRoot(), '.gemini', 'settings.json');
 
       const existing = readJsonFile(settingsPath);
 
-      // Build resource attributes
-      const resourceAttrs: Record<string, string> = {
-        'service.name': 'gemini-cli',
-        ...attrs,
+      const hookEntry = {
+        hooks: [{ type: 'command', command: `python3 ${hookPath}` }],
       };
-      if (projectId) {
-        resourceAttrs['respan.project_id'] = projectId;
+
+      const hooksSection = (existing.hooks || {}) as Record<string, unknown>;
+      const afterModelHooks = Array.isArray(hooksSection.AfterModel)
+        ? [...(hooksSection.AfterModel as Array<Record<string, unknown>>)]
+        : [];
+
+      // Replace existing respan hook or add new one
+      const existingIdx = afterModelHooks.findIndex((entry) => {
+        const inner = Array.isArray(entry.hooks)
+          ? (entry.hooks as Array<Record<string, unknown>>)
+          : [];
+        return inner.some(
+          (h) => typeof h.command === 'string' &&
+            ((h.command as string).includes('respan') || (h.command as string).includes('gemini_hook')),
+        );
+      });
+
+      if (existingIdx >= 0) {
+        afterModelHooks[existingIdx] = hookEntry;
+      } else {
+        afterModelHooks.push(hookEntry);
       }
 
-      // settings.json — enable telemetry with a base endpoint so Gemini
-      // creates the HTTP exporter.  The actual traces URL is overridden via
-      // OTEL_EXPORTER_OTLP_TRACES_ENDPOINT in .env because Gemini CLI
-      // hardcodes appending /v1/traces to otlpEndpoint, but Respan uses
-      // /v2/traces.
-      const patch: Record<string, unknown> = {
-        telemetry: {
-          enabled: true,
-          otlpEndpoint: baseUrl,
-          otlpProtocol: 'http',
-        },
-      };
+      const merged = deepMerge(existing, {
+        hooks: { ...hooksSection, AfterModel: afterModelHooks },
+      });
 
-      const merged = deepMerge(existing, patch);
-
-      // .env file — OTel SDK picks up headers & resource attrs from env
+      // ── 3. Write .env with API key and config ───────────────────
       const envDir = scope === 'global'
         ? expandHome('~/.gemini')
         : path.join(findProjectRoot(), '.gemini');
       const envPath = path.join(envDir, '.env');
 
       const envLines: string[] = [];
-      envLines.push(`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer ${apiKey}`);
-      envLines.push(`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${baseUrl}/v2/traces`);
-      const otelResStr = toOtelResourceAttrs(resourceAttrs);
-      if (otelResStr) {
-        envLines.push(`OTEL_RESOURCE_ATTRIBUTES=${otelResStr}`);
+      envLines.push(`RESPAN_API_KEY=${apiKey}`);
+      envLines.push(`RESPAN_BASE_URL=${baseUrl}`);
+      if (projectId) {
+        envLines.push(`RESPAN_PROJECT_ID=${projectId}`);
       }
 
       // Merge with existing .env (replace our keys, keep the rest)
@@ -123,9 +139,6 @@ Note: Gemini CLI ignores workspace-level telemetry settings, so
 
       this.log('');
       this.log(`Gemini CLI integration complete (${scope}).`);
-      this.log('');
-      this.log('Set dynamic attributes before a session:');
-      this.log('  export OTEL_RESOURCE_ATTRIBUTES="env=prod,task_id=T-123"');
     } catch (error) {
       this.handleError(error);
     }

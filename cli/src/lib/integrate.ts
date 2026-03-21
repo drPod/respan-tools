@@ -101,6 +101,15 @@ export function getHookScript(): string {
 }
 
 /**
+ * Return the bundled Gemini CLI hook script contents.
+ */
+export function getGeminiHookScript(): string {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const hookPath = path.join(dir, '..', 'assets', 'gemini_hook.py');
+  return fs.readFileSync(hookPath, 'utf-8');
+}
+
+/**
  * Return the bundled Codex CLI hook script contents.
  */
 export function getCodexHookScript(): string {
