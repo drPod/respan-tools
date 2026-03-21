@@ -1,200 +1,90 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFileSync } from "fs";
-import { join } from "path";
 
 const RESPAN_BASE_URL =
   process.env.RESPAN_BASE_URL || "https://api.respan.ai";
 const RESPAN_API_KEY = process.env.RESPAN_API_KEY!;
 const ROUTER_PROMPT_ID = process.env.RESPAN_ROUTER_PROMPT_ID!;
+const DOC_FINDER_PROMPT_ID = process.env.RESPAN_DOC_FINDER_PROMPT_ID!;
 const INDEX_PROMPT_ID = process.env.RESPAN_INDEX_PROMPT_ID!;
-const ANSWERER_PROMPT_ID = process.env.RESPAN_ANSWERER_PROMPT_ID!;
 const ROUTER_MODEL = process.env.ROUTER_MODEL || "gpt-4o-mini";
-const ANSWERER_MODEL = process.env.ANSWERER_MODEL || "gpt-4o-mini";
+const DOC_FINDER_MODEL = process.env.DOC_FINDER_MODEL || "gpt-4o-mini";
 
-const DOCS_BASE_PATH = process.env.DOCS_PATH || "";
 const DOCS_BASE_URL = "https://www.respan.ai/docs";
-
-// JSON schema for router output — two states: "router" or "answerer"
-const ROUTER_SCHEMA = {
-  type: "json_schema",
-  json_schema: {
-    name: "router_decision",
-    strict: true,
-    schema: {
-      type: "object",
-      properties: {
-        next_state: {
-          type: "string",
-          enum: ["router", "answerer"],
-        },
-        response: {
-          type: "string",
-          description:
-            "Full markdown answer for the user. Used when next_state is router. Empty when answerer.",
-        },
-        doc_paths: {
-          type: "array",
-          items: { type: "string" },
-          description:
-            "Doc paths to fetch. Used when next_state is answerer.",
-        },
-        context: {
-          type: "string",
-          description:
-            "Brief guidance for the answerer. Used when next_state is answerer.",
-        },
-      },
-      required: ["next_state", "response", "doc_paths", "context"],
-      additionalProperties: false,
-    },
-  },
-};
-
-interface RouterDecision {
-  next_state: "router" | "answerer";
-  response: string;
-  doc_paths: string[];
-  context: string;
-}
 
 async function callRespan(
   promptId: string,
   variables: Record<string, unknown>,
   options: {
     model?: string;
-    stream?: boolean;
-    responseFormat?: unknown;
+    messages?: Record<string, unknown>[];
   } = {}
 ) {
-  const body: Record<string, unknown> = {
-    model: options.model || ROUTER_MODEL,
-    messages: [],
-    stream: options.stream ?? false,
-    prompt: {
-      prompt_id: promptId,
-      override: true,
-      variables,
-    },
-  };
-
-  if (options.responseFormat) {
-    body.response_format = options.responseFormat;
-  }
-
   return fetch(`${RESPAN_BASE_URL}/api/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${RESPAN_API_KEY}`,
     },
-    body: JSON.stringify(body),
-  });
-}
-
-async function fetchDocContent(paths: string[]): Promise<string> {
-  if (!DOCS_BASE_PATH) {
-    return paths
-      .map((p) => `[Documentation page: ${DOCS_BASE_URL}${p}]`)
-      .join("\n\n");
-  }
-
-  const contents: string[] = [];
-  for (const docPath of paths.slice(0, 5)) {
-    try {
-      const filePath = join(DOCS_BASE_PATH, `${docPath}.mdx`);
-      const content = readFileSync(filePath, "utf-8");
-      contents.push(`--- ${DOCS_BASE_URL}${docPath} ---\n${content}\n---`);
-    } catch {
-      // Skip files that don't exist
-    }
-  }
-  return contents.join("\n\n") || "No documentation found for the given paths.";
-}
-
-/**
- * Parse Respan SSE stream and re-emit clean SSE to the client.
- */
-function createCleanSSEStream(upstreamBody: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-
-  return new ReadableStream({
-    async start(controller) {
-      const reader = upstreamBody.getReader();
-      let buffer = "";
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
-            return;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const data = line.slice(6).trim();
-            if (data === "[DONE]") {
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-              controller.close();
-              return;
-            }
-            if (!data) continue;
-
-            try {
-              const parsed = JSON.parse(data);
-              const content = parsed.choices?.[0]?.delta?.content;
-              if (content) {
-                const chunk = JSON.stringify({
-                  choices: [{ delta: { content } }],
-                });
-                controller.enqueue(encoder.encode(`data: ${chunk}\n\n`));
-              }
-            } catch {
-              // skip malformed
-            }
-          }
-        }
-      } catch (err) {
-        controller.error(err);
-      }
-    },
-  });
-}
-
-/**
- * Return a direct text response as an SSE stream (skips Prompt 2).
- */
-function createDirectSSEResponse(text: string): Response {
-  const encoder = new TextEncoder();
-  const chunk = JSON.stringify({
-    choices: [{ delta: { content: text } }],
-  });
-  const body = encoder.encode(`data: ${chunk}\n\ndata: [DONE]\n\n`);
-
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(body);
-        controller.close();
+    body: JSON.stringify({
+      model: options.model || ROUTER_MODEL,
+      messages: options.messages || [],
+      stream: false,
+      prompt: {
+        prompt_id: promptId,
+        override: true,
+        variables,
       },
     }),
-    {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    }
-  );
+  });
 }
 
-const MAX_ROUTER_ITERATIONS = 3;
+/**
+ * Call Doc Finder (Prompt 2) to get relevant doc paths.
+ */
+async function findDocs(query: string): Promise<string[]> {
+  const res = await callRespan(
+    DOC_FINDER_PROMPT_ID,
+    {
+      docs_index: {
+        _type: "prompt",
+        prompt_id: INDEX_PROMPT_ID,
+      },
+      query,
+    },
+    { model: DOC_FINDER_MODEL }
+  );
+
+  if (!res.ok) {
+    console.error("Doc finder error:", res.status, await res.text());
+    return [];
+  }
+
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content || "";
+
+  try {
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed.doc_paths) return parsed.doc_paths;
+  } catch {
+    // Not JSON
+  }
+
+  return content
+    .split(/[\n,]/)
+    .map((line: string) =>
+      line.trim().replace(/^[-*•"\s]+/, "").replace(/["'\s]+$/, "")
+    )
+    .filter((line: string) => line.startsWith("/"))
+    .slice(0, 5);
+}
+
+function sseEvent(
+  type: "status" | "tool_call" | "answer",
+  data: Record<string, string>
+): string {
+  return `data: ${JSON.stringify({ type, ...data })}\n\n`;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -212,97 +102,116 @@ export async function POST(req: NextRequest) {
         .filter((m: { role: string }) => m.role === "user")
         .pop()?.content || "";
 
-    // Agent loop: Router decides next_state, fetches docs if needed, loops back
-    let accumulatedDocs = "";
-    let decision: RouterDecision = {
-      next_state: "router",
-      response: "",
-      doc_paths: [],
-      context: "",
-    };
+    const encoder = new TextEncoder();
 
-    for (let i = 0; i < MAX_ROUTER_ITERATIONS; i++) {
-      const routerRes = await callRespan(
-        ROUTER_PROMPT_ID,
-        {
-          docs_index: {
-            _type: "prompt",
-            prompt_id: INDEX_PROMPT_ID,
-          },
-          user_question: userQuestion,
-          accumulated_context: accumulatedDocs
-            ? `Previously fetched documentation:\n${accumulatedDocs}`
-            : "",
-        },
-        { model: ROUTER_MODEL, responseFormat: ROUTER_SCHEMA }
-      );
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          // Step 1: Call Router (Prompt 1) — tool is in Respan config
+          controller.enqueue(
+            encoder.encode(sseEvent("status", { message: "Thinking..." }))
+          );
 
-      if (!routerRes.ok) {
-        const errText = await routerRes.text();
-        console.error(`Router error (iteration ${i + 1}):`, routerRes.status, errText);
-        return NextResponse.json(
-          { error: "Failed to route question" },
-          { status: 500 }
-        );
-      }
+          const routerRes = await callRespan(
+            ROUTER_PROMPT_ID,
+            { user_question: userQuestion, docs_context: "" },
+            { model: ROUTER_MODEL }
+          );
 
-      const routerData = await routerRes.json();
-      const routerContent =
-        routerData.choices?.[0]?.message?.content || "{}";
+          if (!routerRes.ok) {
+            console.error("Router error:", routerRes.status, await routerRes.text());
+            controller.enqueue(
+              encoder.encode(sseEvent("answer", { content: "Sorry, something went wrong." }))
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+            return;
+          }
 
-      try {
-        decision = JSON.parse(routerContent);
-      } catch {
-        console.error("Failed to parse router JSON:", routerContent);
-        decision = { next_state: "router", response: "Sorry, something went wrong.", doc_paths: [], context: "" };
-      }
+          const routerData = await routerRes.json();
+          const message = routerData.choices?.[0]?.message;
 
-      console.log(
-        `Router iteration ${i + 1}:`,
-        decision.next_state,
-        decision.doc_paths
-      );
+          // Step 2: Did Router call search_docs?
+          if (message?.tool_calls?.length > 0) {
+            const args = JSON.parse(message.tool_calls[0].function.arguments || "{}");
+            const query = args.query || userQuestion;
 
-      if (decision.next_state === "answerer") {
-        // Fetch docs and loop back to router
-        const docsContent = await fetchDocContent(decision.doc_paths);
-        accumulatedDocs += (accumulatedDocs ? "\n\n" : "") + docsContent;
-        continue;
-      }
+            console.log("Tool call: search_docs, query:", query);
+            controller.enqueue(
+              encoder.encode(sseEvent("tool_call", { name: "search_docs", query }))
+            );
 
-      // "router" — it handled it directly, break out
-      break;
-    }
+            // Step 3: Doc Finder (Prompt 2) → get paths
+            controller.enqueue(
+              encoder.encode(sseEvent("status", { message: "Searching docs..." }))
+            );
+            const docPaths = await findDocs(query);
+            console.log("Doc paths:", docPaths);
 
-    // Router responded directly → return response as SSE
-    if (decision.next_state === "router" && decision.response) {
-      return createDirectSSEResponse(decision.response);
-    }
+            const docLinks = docPaths
+              .map((p) => `${DOCS_BASE_URL}${p}`)
+              .join("\n");
 
-    // Answerer path (hit max iterations or router decided answerer with docs)
-    // → use Prompt 2 with accumulated docs
-    const answererRes = await callRespan(
-      ANSWERER_PROMPT_ID,
-      {
-        docs_content: accumulatedDocs,
-        user_question: userQuestion,
-        context: decision.context,
+            // Step 4: Call Router again with tool result — proper OpenAI tool calling flow
+            // Pass the assistant's tool_call message + tool result so the model
+            // sees it already called the tool and now has the result to answer with.
+            controller.enqueue(
+              encoder.encode(sseEvent("status", { message: "Generating answer..." }))
+            );
+
+            const finalRes = await callRespan(
+              ROUTER_PROMPT_ID,
+              {
+                user_question: userQuestion,
+                docs_context: "",
+              },
+              {
+                model: ROUTER_MODEL,
+                messages: [
+                  {
+                    role: "assistant",
+                    content: null,
+                    tool_calls: message.tool_calls,
+                  },
+                  {
+                    role: "tool",
+                    tool_call_id: message.tool_calls[0].id,
+                    content: `Relevant documentation:\n${docLinks}`,
+                  },
+                ],
+              }
+            );
+
+            if (!finalRes.ok) {
+              console.error("Router final error:", finalRes.status, await finalRes.text());
+              controller.enqueue(
+                encoder.encode(sseEvent("answer", { content: "Sorry, something went wrong." }))
+              );
+            } else {
+              const finalData = await finalRes.json();
+              const answer = finalData.choices?.[0]?.message?.content || "No answer.";
+              controller.enqueue(
+                encoder.encode(sseEvent("answer", { content: answer }))
+              );
+            }
+          } else {
+            // Router answered directly
+            const answer = message?.content || "No answer.";
+            controller.enqueue(
+              encoder.encode(sseEvent("answer", { content: answer }))
+            );
+          }
+
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        } catch (err) {
+          console.error("Stream error:", err);
+          controller.error(err);
+        }
       },
-      { model: ANSWERER_MODEL, stream: true }
-    );
+    });
 
-    if (!answererRes.ok) {
-      const errText = await answererRes.text();
-      console.error("Answerer error:", answererRes.status, errText);
-      return NextResponse.json(
-        { error: "Failed to get answer" },
-        { status: 500 }
-      );
-    }
-
-    const cleanStream = createCleanSSEStream(answererRes.body!);
-
-    return new Response(cleanStream, {
+    return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",

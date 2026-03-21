@@ -1,10 +1,10 @@
 import { Flags } from '@oclif/core';
-import { select, password } from '@inquirer/prompts';
+import { select, input } from '@inquirer/prompts';
 import * as http from 'node:http';
 import * as open from 'node:child_process';
 import { BaseCommand } from '../../lib/base-command.js';
 import { setCredential, setActiveProfile } from '../../lib/config.js';
-import { printLoginSuccess } from '../../lib/banner.js';
+import { printBanner, printLoginSuccess } from '../../lib/banner.js';
 import { DEFAULT_BASE_URL, ENTERPRISE_BASE_URL } from '../../lib/auth.js';
 
 const CALLBACK_PORT = 18392;
@@ -122,6 +122,8 @@ export default class AuthLogin extends BaseCommand {
     const profile = flags['profile-name'] || 'default';
     setActiveProfile(profile);
 
+    await printBanner();
+
     // Step 1: Determine environment (skip if --enterprise flag or --api-key with flag)
     const enterprise = flags.enterprise || (!flags['api-key'] && await select({
       message: 'Select your environment:',
@@ -149,7 +151,7 @@ export default class AuthLogin extends BaseCommand {
     });
 
     if (method === 'api_key') {
-      const apiKey = await password({ message: 'Enter your Respan API key:' });
+      const apiKey = await input({ message: 'Enter your Respan API key:' });
       setCredential(profile, { type: 'api_key', apiKey, baseUrl });
       await printLoginSuccess(undefined, profile);
       return;

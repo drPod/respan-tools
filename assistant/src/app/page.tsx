@@ -7,11 +7,20 @@ import remarkGfm from "remark-gfm";
 interface Message {
   role: "user" | "assistant";
   content: string;
+  status?: string;
+}
+
+interface SSEEvent {
+  type: "status" | "tool_call" | "answer";
+  message?: string;
+  content?: string;
+  name?: string;
+  query?: string;
 }
 
 function parseSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  onChunk: (text: string) => void,
+  onEvent: (event: SSEEvent) => void,
   onDone: () => void
 ) {
   const decoder = new TextDecoder();
@@ -37,12 +46,9 @@ function parseSSEStream(
           }
           try {
             const parsed = JSON.parse(data);
-            const content = parsed.choices?.[0]?.delta?.content;
-            if (content) {
-              onChunk(content);
-            }
+            onEvent(parsed);
           } catch {
-            // skip malformed JSON
+            // skip malformed
           }
         }
       }
@@ -54,15 +60,58 @@ function parseSSEStream(
   read();
 }
 
+/**
+ * Fake-stream text character by character.
+ */
+function useFakeStream() {
+  const [displayed, setDisplayed] = useState("");
+  const fullTextRef = useRef("");
+  const indexRef = useRef(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function start(text: string) {
+    fullTextRef.current = text;
+    indexRef.current = 0;
+    setDisplayed("");
+
+    intervalRef.current = setInterval(() => {
+      const idx = indexRef.current;
+      if (idx >= fullTextRef.current.length) {
+        if (intervalRef.current) clearInterval(intervalRef.current);
+        return;
+      }
+      // Stream in chunks of ~3 chars for speed
+      const chunk = fullTextRef.current.slice(idx, idx + 3);
+      indexRef.current = idx + 3;
+      setDisplayed((prev) => prev + chunk);
+    }, 15);
+  }
+
+  function stop() {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    setDisplayed(fullTextRef.current);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
+
+  return { displayed, start, stop };
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [status, setStatus] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fakeStream = useFakeStream();
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, fakeStream.displayed, status]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -74,6 +123,7 @@ export default function Home() {
     setMessages(newMessages);
     setInput("");
     setIsLoading(true);
+    setStatus("Thinking...");
 
     try {
       const res = await fetch("/api/chat", {
@@ -94,23 +144,28 @@ export default function Home() {
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No response body");
 
-      // Add empty assistant message to stream into
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
-
       parseSSEStream(
         reader,
-        (text) => {
-          setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last.role === "assistant") {
-              last.content += text;
-            }
-            return updated;
-          });
+        (event) => {
+          if (event.type === "status") {
+            setStatus(event.message || "");
+          } else if (event.type === "tool_call") {
+            setStatus(`🔍 search_docs("${event.query || ""}")`);
+          } else if (event.type === "answer") {
+            setStatus("");
+            const answer = event.content || "";
+            // Add assistant message and start fake streaming
+            setMessages((prev) => [
+              ...prev,
+              { role: "assistant", content: answer },
+            ]);
+            fakeStream.start(answer);
+          }
         },
         () => {
           setIsLoading(false);
+          setStatus("");
+          fakeStream.stop();
         }
       );
     } catch (error) {
@@ -123,8 +178,16 @@ export default function Home() {
         },
       ]);
       setIsLoading(false);
+      setStatus("");
     }
   }
+
+  // The last message is the one being fake-streamed
+  const isLastMessageStreaming =
+    isLoading === false &&
+    messages.length > 0 &&
+    messages[messages.length - 1].role === "assistant" &&
+    fakeStream.displayed !== messages[messages.length - 1].content;
 
   return (
     <div className="flex flex-col h-screen max-w-3xl mx-auto">
@@ -136,41 +199,56 @@ export default function Home() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {messages.length === 0 && (
+        {messages.length === 0 && !isLoading && (
           <div className="flex items-center justify-center h-full text-gray-400">
             <p>Ask a question about Respan to get started.</p>
           </div>
         )}
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
+        {messages.map((msg, i) => {
+          const isLast = i === messages.length - 1;
+          const isStreamingThis =
+            isLast && msg.role === "assistant" && fakeStream.displayed !== msg.content;
+          const displayContent =
+            isStreamingThis ? fakeStream.displayed : msg.content;
+
+          return (
             <div
-              className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                msg.role === "user"
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-100 dark:bg-gray-800 text-foreground"
-              }`}
+              key={i}
+              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
             >
-              {msg.role === "assistant" && msg.content === "" && isLoading ? (
-                <div className="space-y-2 py-1">
-                  <div className="h-3 w-48 bg-gray-300 dark:bg-gray-600 rounded animate-pulse" />
-                  <div className="h-3 w-64 bg-gray-300 dark:bg-gray-600 rounded animate-pulse" />
-                  <div className="h-3 w-36 bg-gray-300 dark:bg-gray-600 rounded animate-pulse" />
-                </div>
-              ) : msg.role === "assistant" ? (
-                <div className="prose prose-sm dark:prose-invert max-w-none [&_pre]:bg-gray-200 [&_pre]:dark:bg-gray-900 [&_pre]:rounded [&_pre]:p-3 [&_pre]:overflow-x-auto [&_code]:text-sm [&_a]:text-blue-500">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {msg.content}
-                  </ReactMarkdown>
-                </div>
-              ) : (
-                <span className="whitespace-pre-wrap">{msg.content}</span>
-              )}
+              <div
+                className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                  msg.role === "user"
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-100 dark:bg-gray-800 text-foreground"
+                }`}
+              >
+                {msg.role === "assistant" ? (
+                  <div className="prose prose-sm dark:prose-invert max-w-none [&_pre]:bg-gray-200 [&_pre]:dark:bg-gray-900 [&_pre]:rounded [&_pre]:p-3 [&_pre]:overflow-x-auto [&_code]:text-sm [&_a]:text-blue-500">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {displayContent}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <span className="whitespace-pre-wrap">{msg.content}</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Status indicator while loading */}
+        {isLoading && status && (
+          <div className="flex justify-start">
+            <div className="rounded-lg px-4 py-2 bg-gray-100 dark:bg-gray-800 text-foreground">
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                <span className="font-mono">{status}</span>
+              </div>
             </div>
           </div>
-        ))}
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 

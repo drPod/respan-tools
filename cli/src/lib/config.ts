@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-const CONFIG_DIR = path.join(os.homedir(), '.config', 'respan');
+const CONFIG_DIR = path.join(os.homedir(), '.respan');
 const CREDENTIALS_FILE = path.join(CONFIG_DIR, 'credentials.json');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 

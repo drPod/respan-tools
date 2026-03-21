@@ -88,11 +88,17 @@ function renderBanner(lines: string[]): string[] {
 
 const PC = '\x1b[38;2;100;131;240m'; // primary color
 
-export function printBanner(): void {
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function printBanner(): Promise<void> {
   if (!process.stdout.isTTY || process.env.NO_COLOR) return;
+  const lines = renderBanner(BANNER_LINES);
   console.log('');
-  for (const line of renderBanner(BANNER_LINES)) {
+  for (const line of lines) {
     console.log(line);
+    await sleep(80);
   }
   console.log('');
 }
