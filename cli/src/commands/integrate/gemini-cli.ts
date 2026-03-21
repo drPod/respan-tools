@@ -6,7 +6,6 @@ import {
   deepMerge,
   readJsonFile,
   writeJsonFile,
-  readTextFile,
   writeTextFile,
   expandHome,
   parseAttrs,
@@ -46,9 +45,12 @@ Note: Gemini CLI ignores workspace-level telemetry settings, so
     this.globalFlags = flags;
 
     try {
-      const apiKey = this.resolveApiKey();
-      const baseUrl = (flags['base-url']!).replace(/\/+$/, '');
+      // Verify the user is authenticated (key is read by hook from ~/.respan/)
+      this.resolveApiKey();
       const projectId = flags['project-id'];
+      const customerId = flags['customer-id'];
+      const spanName = flags['span-name'];
+      const workflowName = flags['workflow-name'];
       const attrs = parseAttrs(flags.attrs!);
       const dryRun = flags['dry-run'];
       const scope = resolveScope(flags, 'global');
@@ -100,45 +102,45 @@ Note: Gemini CLI ignores workspace-level telemetry settings, so
         hooks: { ...hooksSection, AfterModel: afterModelHooks },
       });
 
-      // ── 3. Write .env with API key and config ───────────────────
-      const envDir = scope === 'global'
-        ? expandHome('~/.gemini')
-        : path.join(findProjectRoot(), '.gemini');
-      const envPath = path.join(envDir, '.env');
+      // ── 3. Write respan.json with non-secret config ─────────────
+      const configPath = expandHome('~/.gemini/respan.json');
+      const respanConfig = readJsonFile(configPath);
+      const newConfig: Record<string, unknown> = { ...respanConfig };
 
-      const envLines: string[] = [];
-      envLines.push(`RESPAN_API_KEY=${apiKey}`);
-      envLines.push(`RESPAN_BASE_URL=${baseUrl}`);
-      if (projectId) {
-        envLines.push(`RESPAN_PROJECT_ID=${projectId}`);
+      if (customerId) newConfig.customer_id = customerId;
+      if (spanName) newConfig.span_name = spanName;
+      if (workflowName) newConfig.workflow_name = workflowName;
+      if (projectId) newConfig.project_id = projectId;
+      for (const [k, v] of Object.entries(attrs)) {
+        newConfig[k] = v;
       }
-
-      // Merge with existing .env (replace our keys, keep the rest)
-      const existingEnv = readTextFile(envPath);
-      const envKeysToSet = new Set(envLines.map(l => l.split('=')[0]));
-      const keptLines = existingEnv
-        .split('\n')
-        .filter(line => {
-          const key = line.split('=')[0];
-          return !envKeysToSet.has(key);
-        });
-      const finalEnv = [...keptLines.filter(l => l.trim() !== ''), ...envLines].join('\n') + '\n';
 
       if (dryRun) {
         this.log(`[dry-run] Would update: ${settingsPath}`);
         this.log(JSON.stringify(merged, null, 2));
-        this.log('');
-        this.log(`[dry-run] Would update: ${envPath}`);
-        this.log(finalEnv);
+        if (Object.keys(newConfig).length > 0) {
+          this.log('');
+          this.log(`[dry-run] Would write: ${configPath}`);
+          this.log(JSON.stringify(newConfig, null, 2));
+        }
       } else {
         writeJsonFile(settingsPath, merged);
         this.log(`Updated settings: ${settingsPath}`);
-        writeTextFile(envPath, finalEnv);
-        this.log(`Updated env: ${envPath}`);
+        if (Object.keys(newConfig).length > 0) {
+          writeJsonFile(configPath, newConfig);
+          this.log(`Wrote Respan config: ${configPath}`);
+        }
       }
 
       this.log('');
       this.log(`Gemini CLI integration complete (${scope}).`);
+      this.log('');
+      this.log('Auth:   ~/.respan/credentials.json  (from `respan auth login`)');
+      this.log('Config: ~/.gemini/respan.json               (shareable, non-secret)');
+      this.log('');
+      this.log('Set properties via integrate flags or edit ~/.gemini/respan.json:');
+      this.log('  respan integrate gemini-cli --customer-id "frank" --span-name "my-app"');
+      this.log('  respan integrate gemini-cli --attrs \'{"team":"platform","env":"staging"}\'');
     } catch (error) {
       this.handleError(error);
     }
