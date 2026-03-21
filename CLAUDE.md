@@ -71,6 +71,7 @@ These are minor config/metadata passthrough issues. Core tracing works correctly
 - **`RESPAN_METADATA` env var not applied**: Custom metadata from the `RESPAN_METADATA` env var is ignored; only `{"source": "gemini-cli"}` appears in metadata.
 - **Custom keys from `respan.json` not merged into metadata**: Only known fields (`customer_id`, `span_name`, `workflow_name`) are read from `~/.gemini/respan.json`; extra keys like `custom_tag` are dropped instead of being merged into span metadata.
 - **`llm_call_count` always 0**: Backend does not count Gemini spans as LLM calls. This is a backend issue, not a hook bug.
+- **Tool use breaks the accumulator (important)**: When Gemini makes a tool call mid-response (e.g., reading a file, running a shell command), the hook accumulates the initial text ("I will read CLAUDE.md...") but never receives a `finishReason=STOP` for that model turn. The tool execution produces a new model turn, but the original state file is orphaned in `~/.gemini/state/`. This means responses involving tool calls may produce no trace or an incomplete one. The `AfterModel` hook fires per streaming chunk — when a tool call happens, the model turn ends without a STOP, then Gemini CLI executes the tool and starts a new model turn. The hook needs to detect tool-call finish reasons and either: (a) send the accumulated text as a partial span, or (b) carry the accumulator across model turns within the same session.
 
 ### Testing
 
