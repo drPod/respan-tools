@@ -22,12 +22,15 @@ so we configure it to send telemetry directly to the Respan OTLP
 endpoint.
 
 Scope:
-  --local    Write to .gemini/settings.json in project root (default)
-  --global   Write to ~/.gemini/settings.json`;
+  --global   Write to ~/.gemini/settings.json (default)
+  --local    Write to .gemini/settings.json in project root
+
+Note: Gemini CLI ignores workspace-level telemetry settings, so
+--global is the default. Use --local only for .env overrides.`;
 
   static examples = [
     'respan integrate gemini-cli',
-    'respan integrate gemini-cli --global',
+    'respan integrate gemini-cli --local',
     'respan integrate gemini-cli --project-id my-project --attrs \'{"env":"prod"}\'',
     'respan integrate gemini-cli --dry-run',
   ];
@@ -47,7 +50,7 @@ Scope:
       const projectId = flags['project-id'];
       const attrs = parseAttrs(flags.attrs!);
       const dryRun = flags['dry-run'];
-      const scope = resolveScope(flags, 'local');
+      const scope = resolveScope(flags, 'global');
 
       // Resolve target settings file
       const settingsPath = scope === 'global'
@@ -65,11 +68,15 @@ Scope:
         resourceAttrs['respan.project_id'] = projectId;
       }
 
-      // settings.json — only telemetry fields Gemini CLI supports
+      // settings.json — enable telemetry with a base endpoint so Gemini
+      // creates the HTTP exporter.  The actual traces URL is overridden via
+      // OTEL_EXPORTER_OTLP_TRACES_ENDPOINT in .env because Gemini CLI
+      // hardcodes appending /v1/traces to otlpEndpoint, but Respan uses
+      // /v2/traces.
       const patch: Record<string, unknown> = {
         telemetry: {
           enabled: true,
-          otlpEndpoint: `${baseUrl}/v2/traces`,
+          otlpEndpoint: baseUrl,
           otlpProtocol: 'http',
         },
       };
@@ -84,6 +91,7 @@ Scope:
 
       const envLines: string[] = [];
       envLines.push(`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer ${apiKey}`);
+      envLines.push(`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${baseUrl}/v2/traces`);
       const otelResStr = toOtelResourceAttrs(resourceAttrs);
       if (otelResStr) {
         envLines.push(`OTEL_RESOURCE_ATTRIBUTES=${otelResStr}`);
