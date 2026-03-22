@@ -80,13 +80,11 @@ except ImportError:
 
 # Map Gemini CLI built-in tool function names to friendly display names,
 # matching the pattern used by the Codex hook (_tool_display_name).
-# Tool names from Gemini CLI docs:
-#   https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/index.md
-#   https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/file-system.md
-#   https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/web-search.md
-#   https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/web-fetch.md
+# Source: packages/core/src/tools/definitions/base-declarations.ts
+#   https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/tools/definitions/base-declarations.ts
 GEMINI_TOOL_DISPLAY_NAMES = {
     "read_file": "File Read",
+    "read_many_files": "File Read",
     "write_file": "File Write",
     "list_directory": "Directory List",
     "run_shell_command": "Shell",
@@ -94,8 +92,10 @@ GEMINI_TOOL_DISPLAY_NAMES = {
     "web_fetch": "Web Fetch",
     "glob": "Find Files",
     "grep_search": "Search Text",
-    "search_file_content": "Search Text",
     "replace": "File Edit",
+    "save_memory": "Memory",
+    "write_todos": "Todos",
+    "get_internal_docs": "Docs",
 }
 
 
@@ -345,13 +345,13 @@ def _format_tool_input(tool_name: str, args: Any) -> str:
         if dir_path:
             result = f"[{dir_path}] {result}"
         return truncate(result)
-    if tool_name in ("read_file", "write_file") and isinstance(args, dict):
+    if tool_name in ("read_file", "read_many_files", "write_file") and isinstance(args, dict):
         return truncate(args.get("file_path", json.dumps(args, default=str)))
     if tool_name == "google_web_search" and isinstance(args, dict):
         return truncate(f"Query: {args.get('query', str(args))}")
     if tool_name == "web_fetch" and isinstance(args, dict):
         return truncate(args.get("url", str(args)))
-    if tool_name in ("glob", "grep_search", "search_file_content") and isinstance(args, dict):
+    if tool_name in ("glob", "grep_search") and isinstance(args, dict):
         return truncate(args.get("pattern", json.dumps(args, default=str)))
     if tool_name == "replace" and isinstance(args, dict):
         path = args.get("file_path", "")
