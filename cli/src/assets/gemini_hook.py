@@ -535,20 +535,23 @@ def build_spans(
 
     # ------------------------------------------------------------------
     # Tool child spans (one per detected tool turn)
-    # When tool details are available (from functionCall parts in
-    # candidates), we create rich spans with mapped display names and
-    # formatted input — matching the Codex hook pattern.
+    # Tool details come from BeforeTool/AfterTool hooks (primary) or
+    # from functionCall parts in AfterModel candidates (fallback).
     # ------------------------------------------------------------------
     _details = tool_details or []
     for i in range(1, tool_turns + 1):
         detail = _details[i - 1] if i <= len(_details) else None
         tool_name = (detail.get("name", "") if detail else "") or ""
-        tool_args = (detail.get("args", {}) if detail else {}) or {}
+        # BeforeTool/AfterTool use "input", functionCall parts use "args"
+        tool_args = (detail.get("args") or detail.get("input", {}) if detail else {}) or {}
+        tool_output = (detail.get("output", "") if detail else "") or ""
         display_name = _tool_display_name(tool_name) if tool_name else f"Call {i}"
-        tool_input = _format_tool_input(tool_name, tool_args) if tool_name else ""
+        tool_input_str = _format_tool_input(tool_name, tool_args) if tool_name else ""
         tool_meta: Dict[str, Any] = {}
         if tool_name:
             tool_meta["tool_name"] = tool_name
+        if detail and detail.get("error"):
+            tool_meta["error"] = detail["error"]
 
         spans.append({
             "trace_unique_id": trace_unique_id,
@@ -560,8 +563,8 @@ def build_spans(
             "log_type": "tool",
             "provider_id": "",
             "metadata": tool_meta,
-            "input": tool_input,
-            "output": "",
+            "input": tool_input_str,
+            "output": truncate(tool_output),
             "timestamp": end_time,
             "start_time": begin_time,
         })
@@ -781,6 +784,58 @@ except Exception as e:
         payload_file.unlink(missing_ok=True)
 
 
+# ── BeforeTool / AfterTool handlers ──────────────────────────────
+
+def _process_before_tool(hook_data: Dict[str, Any]) -> None:
+    """Store tool name and input from BeforeTool hook into state."""
+    session_id = hook_data.get("session_id", "unknown")
+    tool_name = hook_data.get("tool_name", "")
+    tool_input = hook_data.get("tool_input", {})
+
+    debug(f"BeforeTool: {tool_name}")
+
+    state = load_stream_state(session_id)
+    pending = state.get("pending_tools", [])
+    pending.append({"name": tool_name, "input": tool_input})
+    state["pending_tools"] = pending
+    save_stream_state(session_id, state)
+
+    print("{}")
+    sys.stdout.flush()
+
+
+def _process_after_tool(hook_data: Dict[str, Any]) -> None:
+    """Match pending tool and store output from AfterTool hook into state."""
+    session_id = hook_data.get("session_id", "unknown")
+    tool_name = hook_data.get("tool_name", "")
+    tool_response = hook_data.get("tool_response", {})
+
+    output = tool_response.get("llmContent", "")
+    error = tool_response.get("error")
+    debug(f"AfterTool: {tool_name}, output_len={len(output)}, error={error}")
+
+    state = load_stream_state(session_id)
+    pending = state.get("pending_tools", [])
+    completed = state.get("tool_details", [])
+
+    # Match last pending tool with this name
+    for i in range(len(pending) - 1, -1, -1):
+        if pending[i]["name"] == tool_name:
+            detail = pending.pop(i)
+            detail["output"] = output
+            if error:
+                detail["error"] = error
+            completed.append(detail)
+            break
+
+    state["pending_tools"] = pending
+    state["tool_details"] = completed
+    save_stream_state(session_id, state)
+
+    print("{}")
+    sys.stdout.flush()
+
+
 def _process_chunk(hook_data: Dict[str, Any]) -> None:
     """Process a single streaming chunk under advisory file lock.
 
@@ -988,9 +1043,15 @@ def main():
             return
 
         hook_data = json.loads(raw)
+        event = hook_data.get("hook_event_name", "")
 
         with state_lock():
-            _process_chunk(hook_data)
+            if event == "BeforeTool":
+                _process_before_tool(hook_data)
+            elif event == "AfterTool":
+                _process_after_tool(hook_data)
+            else:
+                _process_chunk(hook_data)
 
     except json.JSONDecodeError as e:
         log("ERROR", f"Invalid JSON from stdin: {e}")

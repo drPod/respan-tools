@@ -66,7 +66,7 @@ Note: Gemini CLI ignores workspace-level telemetry settings, so
         this.log(`Wrote hook script: ${hookPath}`);
       }
 
-      // ── 2. Register AfterModel hook in settings.json ────────────
+      // ── 2. Register hooks in settings.json ────────────────────────
       const settingsPath = scope === 'global'
         ? expandHome('~/.gemini/settings.json')
         : path.join(findProjectRoot(), '.gemini', 'settings.json');
@@ -78,30 +78,39 @@ Note: Gemini CLI ignores workspace-level telemetry settings, so
       };
 
       const hooksSection = (existing.hooks || {}) as Record<string, unknown>;
-      const afterModelHooks = Array.isArray(hooksSection.AfterModel)
-        ? [...(hooksSection.AfterModel as Array<Record<string, unknown>>)]
-        : [];
 
-      // Replace existing respan hook or add new one
-      const existingIdx = afterModelHooks.findIndex((entry) => {
-        const inner = Array.isArray(entry.hooks)
-          ? (entry.hooks as Array<Record<string, unknown>>)
+      // Register the same hook script for AfterModel, BeforeTool, and AfterTool.
+      // AfterModel captures streaming text; BeforeTool/AfterTool capture tool
+      // names, arguments, and output for rich tool spans.
+      const hookEvents = ['AfterModel', 'BeforeTool', 'AfterTool'] as const;
+      const updatedHooks: Record<string, unknown> = { ...hooksSection };
+
+      for (const eventName of hookEvents) {
+        const eventHooks = Array.isArray(hooksSection[eventName])
+          ? [...(hooksSection[eventName] as Array<Record<string, unknown>>)]
           : [];
-        return inner.some(
-          (h) => typeof h.command === 'string' &&
-            ((h.command as string).includes('respan') || (h.command as string).includes('gemini_hook')),
-        );
-      });
 
-      if (existingIdx >= 0) {
-        afterModelHooks[existingIdx] = hookEntry;
-      } else {
-        afterModelHooks.push(hookEntry);
+        // Replace existing respan hook or add new one
+        const existingIdx = eventHooks.findIndex((entry) => {
+          const inner = Array.isArray(entry.hooks)
+            ? (entry.hooks as Array<Record<string, unknown>>)
+            : [];
+          return inner.some(
+            (h) => typeof h.command === 'string' &&
+              ((h.command as string).includes('respan') || (h.command as string).includes('gemini_hook')),
+          );
+        });
+
+        if (existingIdx >= 0) {
+          eventHooks[existingIdx] = hookEntry;
+        } else {
+          eventHooks.push(hookEntry);
+        }
+
+        updatedHooks[eventName] = eventHooks;
       }
 
-      const merged = deepMerge(existing, {
-        hooks: { ...hooksSection, AfterModel: afterModelHooks },
-      });
+      const merged = deepMerge(existing, { hooks: updatedHooks });
 
       // ── 3. Write respan.json with non-secret config ─────────────
       const configPath = expandHome('~/.gemini/respan.json');
