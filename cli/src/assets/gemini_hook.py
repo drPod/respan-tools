@@ -347,12 +347,14 @@ def _format_tool_input(tool_name: str, args: Any) -> str:
         if dir_path:
             result = f"[{dir_path}] {result}"
         return truncate(result)
-    if tool_name in ("read_file", "read_many_files", "write_file") and isinstance(args, dict):
+    if tool_name in ("read_file", "write_file") and isinstance(args, dict):
         return truncate(args.get("file_path", json.dumps(args, default=str)))
+    if tool_name == "read_many_files" and isinstance(args, dict):
+        return truncate(args.get("include", json.dumps(args, default=str)))
     if tool_name == "google_web_search" and isinstance(args, dict):
         return truncate(f"Query: {args.get('query', str(args))}")
     if tool_name == "web_fetch" and isinstance(args, dict):
-        return truncate(args.get("url", str(args)))
+        return truncate(args.get("prompt", json.dumps(args, default=str)))
     if tool_name in ("glob", "grep_search", "search_file_content") and isinstance(args, dict):
         return truncate(args.get("pattern", json.dumps(args, default=str)))
     if tool_name == "replace" and isinstance(args, dict):
