@@ -107,6 +107,10 @@ Note: Gemini CLI ignores workspace-level telemetry settings, so
       const respanConfig = readJsonFile(configPath);
       const newConfig: Record<string, unknown> = { ...respanConfig };
 
+      const baseUrl = flags['base-url'];
+      if (baseUrl && baseUrl !== 'https://api.respan.ai/api') {
+        newConfig.base_url = baseUrl;
+      }
       if (customerId) newConfig.customer_id = customerId;
       if (spanName) newConfig.span_name = spanName;
       if (workflowName) newConfig.workflow_name = workflowName;

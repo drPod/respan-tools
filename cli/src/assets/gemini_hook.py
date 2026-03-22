@@ -36,16 +36,25 @@ Configuration:
              empty chunks; increase for slow tools like web search)
 """
 
+import contextlib
 import json
 import os
 import sys
+import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # Not available on Windows
+
 # Configuration
 STATE_DIR = Path.home() / ".gemini" / "state"
 LOG_FILE = STATE_DIR / "respan_hook.log"
+LOCK_FILE = STATE_DIR / "respan_hook.lock"
 DEBUG = os.environ.get("GEMINI_RESPAN_DEBUG", "").lower() == "true"
 
 try:
@@ -59,7 +68,7 @@ except (ValueError, TypeError):
     SEND_DELAY = 10
 
 # Known config keys in respan.json that map to span fields.
-KNOWN_CONFIG_KEYS = {"customer_id", "span_name", "workflow_name", "project_id"}
+KNOWN_CONFIG_KEYS = {"customer_id", "span_name", "workflow_name", "project_id", "base_url"}
 
 
 def log(level: str, message: str) -> None:
@@ -109,6 +118,13 @@ def resolve_credentials() -> Tuple[Optional[str], str]:
             except (json.JSONDecodeError, IOError) as e:
                 debug(f"Failed to read credentials.json: {e}")
 
+    # Also check respan.json for base_url (written by `respan integrate gemini-cli --base-url`)
+    if not base_url or base_url == "https://api.respan.ai/api":
+        config = load_respan_config()
+        cfg_base = config.get("fields", {}).get("base_url", "")
+        if cfg_base:
+            base_url = cfg_base
+
     # Always ensure base_url ends with /api
     if base_url and not base_url.rstrip("/").endswith("/api"):
         base_url = base_url.rstrip("/") + "/api"
@@ -155,16 +171,29 @@ def load_stream_state(session_id: str) -> Dict[str, Any]:
     p = _state_path(session_id)
     if p.exists():
         try:
-            return json.loads(p.read_text())
+            return json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             pass
     return {"accumulated_text": "", "last_tokens": 0, "first_chunk_time": ""}
 
 
 def save_stream_state(session_id: str, state: Dict[str, Any]) -> None:
+    """Save state atomically via write-to-temp + rename."""
     p = _state_path(session_id)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(state))
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+            os.rename(tmp_path, str(p))
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+    except OSError as e:
+        log("ERROR", f"Failed to save state atomically, falling back: {e}")
+        p.write_text(json.dumps(state), encoding="utf-8")
 
 
 def clear_stream_state(session_id: str) -> None:
@@ -173,6 +202,46 @@ def clear_stream_state(session_id: str) -> None:
         p.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+@contextlib.contextmanager
+def state_lock(timeout: float = 5.0):
+    """Acquire an advisory file lock around state operations."""
+    if fcntl is None:
+        yield
+        return
+
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = None
+    try:
+        lock_fd = open(LOCK_FILE, "w")
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except (IOError, OSError):
+                if time.monotonic() >= deadline:
+                    debug("Could not acquire state lock within timeout, proceeding without lock")
+                    lock_fd.close()
+                    lock_fd = None
+                    break
+                time.sleep(0.1)
+    except Exception as e:
+        debug(f"Lock error, proceeding without lock: {e}")
+        if lock_fd is not None:
+            with contextlib.suppress(Exception):
+                lock_fd.close()
+        lock_fd = None
+
+    try:
+        yield
+    finally:
+        if lock_fd is not None:
+            with contextlib.suppress(Exception):
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            with contextlib.suppress(Exception):
+                lock_fd.close()
 
 
 # ── Data extraction ───────────────────────────────────────────────
@@ -223,8 +292,17 @@ def build_spans(
     tokens: Dict[str, int],
     config: Optional[Dict[str, Any]] = None,
     start_time_iso: Optional[str] = None,
+    tool_turns: int = 0,
 ) -> List[Dict[str, Any]]:
-    """Build a single Respan span for a Gemini CLI LLM call."""
+    """Build Respan spans for a Gemini CLI LLM call.
+
+    Produces a span tree matching the Claude Code / Codex hook structure:
+        Root: gemini-cli (agent container — metadata, latency)
+          └── gemini.chat (generation — model, tokens, messages)
+          └── Tool: Call N (one per tool turn, if any)
+    """
+    spans: List[Dict[str, Any]] = []
+
     session_id = hook_data.get("session_id", "")
     model = detect_model(hook_data)
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -248,11 +326,14 @@ def build_spans(
     cfg_fields = (config or {}).get("fields", {})
     cfg_props = (config or {}).get("properties", {})
 
-    # IDs — keep short to avoid DB column truncation
-    trace_unique_id = f"gcli_{session_id}"
-    span_unique_id = f"gcli_{session_id}_gen"
+    # IDs — keep under 64 chars to avoid silent drops on ingest.
+    # Longest suffix is "_tool_99" (8 chars) + prefix "gcli_" (5 chars) = 13.
+    safe_id = session_id.replace("/", "_").replace("\\", "_")[:50]
+    trace_unique_id = f"gcli_{safe_id}"
+    root_span_id = f"gcli_{safe_id}_root"
+    gen_span_id = f"gcli_{safe_id}_gen"
     workflow_name = os.environ.get("RESPAN_WORKFLOW_NAME") or cfg_fields.get("workflow_name") or "gemini-cli"
-    span_name = os.environ.get("RESPAN_SPAN_NAME") or cfg_fields.get("span_name") or "gemini.chat"
+    root_span_name = os.environ.get("RESPAN_SPAN_NAME") or cfg_fields.get("span_name") or "gemini-cli"
     thread_id = f"gcli_{session_id}"
     customer_id = os.environ.get("RESPAN_CUSTOMER_ID") or cfg_fields.get("customer_id") or ""
 
@@ -272,42 +353,88 @@ def build_spans(
                 metadata.update(extra)
         except json.JSONDecodeError:
             pass
+    if tool_turns > 0:
+        metadata["tool_turns"] = tool_turns
 
     # Token counts
     prompt_tokens = tokens.get("prompt_tokens", 0)
     completion_tokens = tokens.get("completion_tokens", 0)
     total_tokens = tokens.get("total_tokens", 0) or (prompt_tokens + completion_tokens)
 
-    span: Dict[str, Any] = {
+    # ------------------------------------------------------------------
+    # Root span — agent container (matches Claude Code / Codex pattern)
+    # ------------------------------------------------------------------
+    root_span: Dict[str, Any] = {
         "trace_unique_id": trace_unique_id,
-        "span_unique_id": span_unique_id,
-        "span_name": span_name,
-        "span_workflow_name": workflow_name,
         "thread_identifier": thread_id,
         "customer_identifier": customer_id,
+        "span_unique_id": root_span_id,
+        "span_name": root_span_name,
+        "span_workflow_name": workflow_name,
         "model": model,
-        "log_type": "chat",
+        "provider_id": "",
+        "span_path": "",
+        "input": json.dumps(prompt_messages) if prompt_messages else "",
+        "output": json.dumps(completion_message),
+        "timestamp": end_time,
+        "start_time": begin_time,
+        "metadata": metadata,
+    }
+    if latency is not None:
+        root_span["latency"] = latency
+    spans.append(root_span)
+
+    # ------------------------------------------------------------------
+    # Generation child span — carries model, tokens, messages
+    # ------------------------------------------------------------------
+    gen_span: Dict[str, Any] = {
+        "trace_unique_id": trace_unique_id,
+        "span_unique_id": gen_span_id,
+        "span_parent_id": root_span_id,
+        "span_name": "gemini.chat",
+        "span_workflow_name": workflow_name,
+        "span_path": "gemini_chat",
+        "model": model,
         "provider_id": "google",
+        "log_type": "chat",
+        "metadata": {},
         "input": json.dumps(prompt_messages) if prompt_messages else "",
         "output": json.dumps(completion_message),
         "prompt_messages": prompt_messages,
         "completion_message": completion_message,
         "timestamp": end_time,
         "start_time": begin_time,
-        "metadata": metadata,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
     }
-
     if latency is not None:
-        span["latency"] = latency
-
+        gen_span["latency"] = latency
     # Optional LLM config fields
     if req_config.get("temperature") is not None:
-        span["temperature"] = req_config["temperature"]
+        gen_span["temperature"] = req_config["temperature"]
     if req_config.get("maxOutputTokens") is not None:
-        span["max_tokens"] = req_config["maxOutputTokens"]
+        gen_span["max_tokens"] = req_config["maxOutputTokens"]
+    spans.append(gen_span)
+
+    # ------------------------------------------------------------------
+    # Tool child spans (one per detected tool turn)
+    # ------------------------------------------------------------------
+    for i in range(1, tool_turns + 1):
+        spans.append({
+            "trace_unique_id": trace_unique_id,
+            "span_unique_id": f"gcli_{safe_id}_tool_{i}",
+            "span_parent_id": root_span_id,
+            "span_name": f"Tool: Call {i}",
+            "span_workflow_name": workflow_name,
+            "span_path": "tool_call",
+            "provider_id": "",
+            "metadata": {},
+            "input": "",
+            "output": "",
+            "timestamp": end_time,
+            "start_time": begin_time,
+        })
 
     # Platform defaults (must match Claude Code / Codex hooks exactly)
     respan_defaults = {
@@ -323,11 +450,12 @@ def build_spans(
         "disable_log": False,
         "request_breakdown": False,
     }
-    for key, value in respan_defaults.items():
-        if key not in span:
-            span[key] = value
+    for span in spans:
+        for key, value in respan_defaults.items():
+            if key not in span:
+                span[key] = value
 
-    return [span]
+    return spans
 
 
 # ── Send to Respan ────────────────────────────────────────────────
@@ -339,7 +467,10 @@ def send_spans(
 ) -> None:
     """Send spans to Respan as a single batch via /v1/traces/ingest (array format).
 
-    Uses subprocess curl to avoid a hard dependency on the ``requests`` library.
+    Writes the payload to a temp file and launches an inline Python script
+    via ``subprocess.Popen`` so the HTTP request runs in a fully independent
+    process (Gemini CLI may kill the hook after reading ``{}``).
+    Uses ``urllib`` (stdlib) — no dependency on ``requests`` or external scripts.
     """
     url = f"{base_url}/v1/traces/ingest"
 
@@ -356,14 +487,48 @@ def send_spans(
     payload_file = STATE_DIR / f"respan_send_{os.getpid()}.json"
     payload_file.write_text(json.dumps(spans), encoding="utf-8")
 
-    sender = Path.home() / ".respan" / "send_spans.py"
+    # Inline script uses urllib (stdlib) — no dependency on requests or
+    # external send_spans.py.  API key is passed via environment variable
+    # to avoid exposure in process listings.
+    sender_script = (
+        "import os, sys, time\n"
+        "from pathlib import Path\n"
+        "from urllib.request import Request, urlopen\n"
+        "from urllib.error import URLError, HTTPError\n"
+        f"pf = Path({str(payload_file)!r})\n"
+        "try:\n"
+        "    data = pf.read_bytes()\n"
+        "    for attempt in range(3):\n"
+        "        try:\n"
+        f"            req = Request({url!r}, data=data, headers={{\n"
+        '                "Content-Type": "application/json",\n'
+        '                "Authorization": "Bearer " + os.environ["RESPAN_API_KEY"],\n'
+        "            })\n"
+        "            urlopen(req, timeout=30)\n"
+        "            break\n"
+        "        except HTTPError as e:\n"
+        "            if e.code < 500:\n"
+        "                break\n"
+        "            if attempt < 2:\n"
+        "                time.sleep(1)\n"
+        "        except (URLError, OSError):\n"
+        "            if attempt < 2:\n"
+        "                time.sleep(1)\n"
+        "finally:\n"
+        "    pf.unlink(missing_ok=True)\n"
+    )
+
+    env = os.environ.copy()
+    env["RESPAN_API_KEY"] = api_key
+
     try:
         subprocess.Popen(
-            ["python3", str(sender), str(payload_file), api_key, url],
+            ["python3", "-c", sender_script],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            env=env,
         )
         debug("Launched sender subprocess")
     except Exception as e:
@@ -390,16 +555,19 @@ def launch_delayed_send(
     payload_file.write_text(json.dumps(spans), encoding="utf-8")
 
     state_file_path = str(_state_path(session_id))
-    sender_path = str(Path.home() / ".respan" / "send_spans.py")
     log_path = str(LOG_FILE)
     debug_flag = "1" if DEBUG else "0"
+    url = f"{base_url}/v1/traces/ingest"
 
-    # Small inline script that sleeps, checks version, then delegates to
-    # send_spans.py (which handles the actual HTTP POST + cleanup).
+    # Inline script: sleep, check version, then POST with urllib (stdlib).
+    # API key is received via RESPAN_API_KEY env var — never interpolated
+    # into the script string.
     script = f"""
-import json, time, subprocess, sys, os
+import json, time, os, sys
 from pathlib import Path
 from datetime import datetime
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 def _log(msg):
     if "{debug_flag}" == "1":
@@ -428,22 +596,39 @@ try:
 
     _log(f"version matches ({send_version}), sending")
 
-    # Delegate to send_spans.py (handles HTTP POST + payload cleanup)
-    subprocess.Popen(
-        ["python3", "{sender_path}", str(payload_file), "{api_key}", "{base_url}/v1/traces/ingest"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    data = payload_file.read_bytes()
+    for attempt in range(3):
+        try:
+            req = Request("{url}", data=data, headers={{
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + os.environ.get("RESPAN_API_KEY", ""),
+            }})
+            urlopen(req, timeout=30)
+            _log("sent successfully")
+            break
+        except HTTPError as e:
+            if e.code < 500:
+                _log(f"client error {{e.code}}, not retrying")
+                break
+            if attempt < 2:
+                _log(f"server error {{e.code}}, retrying in 1s")
+                time.sleep(1)
+        except (URLError, OSError) as e:
+            if attempt < 2:
+                _log(f"connection error {{e}}, retrying in 1s")
+                time.sleep(1)
 
-    # Clear the state file now that we've sent
+    # Clear state and payload now that we've sent
     state_file.unlink(missing_ok=True)
+    payload_file.unlink(missing_ok=True)
 
 except Exception as e:
     _log(f"error: {{e}}")
     payload_file.unlink(missing_ok=True)
 """
+
+    env = os.environ.copy()
+    env["RESPAN_API_KEY"] = api_key
 
     try:
         subprocess.Popen(
@@ -452,11 +637,189 @@ except Exception as e:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            env=env,
         )
         debug(f"Launched delayed sender (version={send_version}, delay={SEND_DELAY}s)")
     except Exception as e:
         log("ERROR", f"Failed to launch delayed sender: {e}")
         payload_file.unlink(missing_ok=True)
+
+
+def _process_chunk(hook_data: Dict[str, Any]) -> None:
+    """Process a single streaming chunk under advisory file lock.
+
+    This function contains all state read/modify/write logic. It is called
+    from ``main()`` inside ``with state_lock():`` to prevent concurrent
+    hook invocations from corrupting the accumulator state.
+    """
+    session_id = hook_data.get("session_id", "unknown")
+
+    # Extract current chunk data
+    llm_resp = hook_data.get("llm_response", {})
+    chunk_text = llm_resp.get("text", "") or ""
+    usage = llm_resp.get("usageMetadata", {})
+    completion_tokens = usage.get("candidatesTokenCount", 0) or 0
+
+    # Check for finish signal and tool calls in candidates
+    candidates = llm_resp.get("candidates", [])
+    finish_reason = ""
+    has_tool_call = False
+    if candidates and isinstance(candidates, list) and isinstance(candidates[0], dict):
+        finish_reason = candidates[0].get("finishReason", "")
+        content = candidates[0].get("content", {})
+        if isinstance(content, dict):
+            for part in content.get("parts", []):
+                if isinstance(part, dict) and (
+                    "functionCall" in part or "toolCall" in part
+                ):
+                    has_tool_call = True
+                    break
+
+    # Message count for detecting tool-call resumptions across turns.
+    messages = hook_data.get("llm_request", {}).get("messages", [])
+    current_msg_count = len(messages)
+
+    # Load accumulated state
+    state = load_stream_state(session_id)
+
+    is_finished = finish_reason in ("STOP", "MAX_TOKENS", "SAFETY")
+
+    # ── Step 0: Detect tool-call resumption via message count ────
+    saved_msg_count = state.get("msg_count", 0)
+    tool_call_detected = False
+
+    if saved_msg_count > 0 and current_msg_count > saved_msg_count:
+        new_msgs = messages[saved_msg_count:]
+        has_new_user_msg = any(
+            m.get("role") == "user" for m in new_msgs
+        )
+        if has_new_user_msg:
+            debug(
+                f"New user message detected "
+                f"(msgs {saved_msg_count} → {current_msg_count}), "
+                f"starting fresh turn"
+            )
+            clear_stream_state(session_id)
+            state = {
+                "accumulated_text": "", "last_tokens": 0,
+                "first_chunk_time": "",
+            }
+        else:
+            state["tool_turns"] = state.get("tool_turns", 0) + 1
+            state["send_version"] = state.get("send_version", 0) + 1
+            tool_call_detected = True
+            debug(
+                f"Tool call detected via msg_count "
+                f"({saved_msg_count} → {current_msg_count}), "
+                f"keeping {len(state['accumulated_text'])} chars buffered, "
+                f"tool_turns={state['tool_turns']}, "
+                f"send_version={state['send_version']}"
+            )
+
+    state["msg_count"] = current_msg_count
+
+    # ── Step 1: Accumulate text chunks ───────────────────────────
+    if chunk_text:
+        if not state.get("first_chunk_time"):
+            state["first_chunk_time"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S.%f"
+            )[:-3] + "Z"
+        state["accumulated_text"] += chunk_text
+        state["last_tokens"] = completion_tokens or state.get("last_tokens", 0)
+        save_stream_state(session_id, state)
+        debug(
+            f"Accumulated chunk: +{len(chunk_text)} chars, "
+            f"total={len(state['accumulated_text'])}"
+        )
+
+    # ── Step 1.5: functionCall/toolCall in response parts ────────
+    is_tool_turn = has_tool_call or finish_reason in (
+        "TOOL_CALLS", "FUNCTION_CALL", "TOOL_USE",
+    )
+    if is_tool_turn:
+        state["tool_turns"] = state.get("tool_turns", 0) + 1
+        state["send_version"] = state.get("send_version", 0) + 1
+        save_stream_state(session_id, state)
+        debug(
+            f"Tool call detected via response parts "
+            f"(finish_reason={finish_reason}, has_tool_call={has_tool_call}), "
+            f"carrying accumulator, tool_turns={state['tool_turns']}"
+        )
+        print("{}")
+        sys.stdout.flush()
+        return
+
+    # ── Step 2: Detect completion and send ───────────────────────
+    has_new_text = (
+        len(state.get("accumulated_text", ""))
+        > state.get("last_send_text_len", 0)
+    )
+    should_send = (
+        not tool_call_detected
+        and has_new_text
+        and state["accumulated_text"]
+        and ((not chunk_text) or is_finished)
+    )
+
+    # Print response immediately so Gemini CLI can proceed
+    print("{}")
+    sys.stdout.flush()
+
+    if not should_send:
+        if tool_call_detected:
+            save_stream_state(session_id, state)
+        return
+
+    # Resolve credentials before deciding send strategy
+    api_key, base_url = resolve_credentials()
+    if not api_key:
+        log("ERROR", "No API key found. Run: respan auth login")
+        clear_stream_state(session_id)
+        return
+
+    final_prompt = usage.get("promptTokenCount", 0) or 0
+    final_completion = completion_tokens or state.get("last_tokens", 0)
+    final_total = usage.get("totalTokenCount", 0) or 0
+    tok = {
+        "prompt_tokens": final_prompt,
+        "completion_tokens": final_completion,
+        "total_tokens": final_total or (final_prompt + final_completion),
+    }
+    config = load_respan_config()
+    spans = build_spans(
+        hook_data,
+        state["accumulated_text"],
+        tok,
+        config,
+        start_time_iso=state.get("first_chunk_time"),
+        tool_turns=state.get("tool_turns", 0),
+    )
+
+    n_tool_turns = state.get("tool_turns", 0)
+
+    # Method b: text + STOP → send immediately.
+    if is_finished and chunk_text:
+        debug(
+            f"Immediate send (text+STOP, tool_turns={n_tool_turns}), "
+            f"sending {len(state['accumulated_text'])} chars"
+        )
+        send_spans(spans, api_key, base_url)
+        clear_stream_state(session_id)
+        return
+
+    # Method a: empty chunk after accumulated text — delayed send.
+    state["send_version"] = state.get("send_version", 0) + 1
+    state["last_send_text_len"] = len(state["accumulated_text"])
+    save_stream_state(session_id, state)
+    debug(
+        f"Delayed send (version={state['send_version']}, "
+        f"tool_turns={n_tool_turns}, delay={SEND_DELAY}s), "
+        f"buffered {len(state['accumulated_text'])} chars"
+    )
+    launch_delayed_send(
+        session_id, state["send_version"],
+        spans, api_key, base_url,
+    )
 
 
 def main():
@@ -467,198 +830,9 @@ def main():
             return
 
         hook_data = json.loads(raw)
-        session_id = hook_data.get("session_id", "unknown")
 
-        # Extract current chunk data
-        llm_resp = hook_data.get("llm_response", {})
-        chunk_text = llm_resp.get("text", "") or ""
-        usage = llm_resp.get("usageMetadata", {})
-        completion_tokens = usage.get("candidatesTokenCount", 0) or 0
-
-        # Check for finish signal and tool calls in candidates
-        candidates = llm_resp.get("candidates", [])
-        finish_reason = ""
-        has_tool_call = False
-        if candidates and isinstance(candidates, list) and isinstance(candidates[0], dict):
-            finish_reason = candidates[0].get("finishReason", "")
-            # Check for function/tool call parts — safety net for future
-            # Gemini CLI versions that may include this data in the hook.
-            content = candidates[0].get("content", {})
-            if isinstance(content, dict):
-                for part in content.get("parts", []):
-                    if isinstance(part, dict) and (
-                        "functionCall" in part or "toolCall" in part
-                    ):
-                        has_tool_call = True
-                        break
-
-        # Message count for detecting tool-call resumptions across turns.
-        # When Gemini executes a tool, it adds the model's pre-tool response
-        # to the messages array before starting the next model turn.
-        messages = hook_data.get("llm_request", {}).get("messages", [])
-        current_msg_count = len(messages)
-
-        # Load accumulated state
-        state = load_stream_state(session_id)
-
-        is_finished = finish_reason in ("STOP", "MAX_TOKENS", "SAFETY")
-
-        # ── Step 0: Detect tool-call resumption via message count ────
-        # If msg_count increased and the new messages are model-role (not a
-        # new user prompt in interactive mode), a tool call happened.
-        saved_msg_count = state.get("msg_count", 0)
-        tool_call_detected = False
-
-        if saved_msg_count > 0 and current_msg_count > saved_msg_count:
-            new_msgs = messages[saved_msg_count:]
-            has_new_user_msg = any(
-                m.get("role") == "user" for m in new_msgs
-            )
-            if has_new_user_msg:
-                # New user input in interactive mode — start fresh turn
-                debug(
-                    f"New user message detected "
-                    f"(msgs {saved_msg_count} → {current_msg_count}), "
-                    f"starting fresh turn"
-                )
-                clear_stream_state(session_id)
-                state = {
-                    "accumulated_text": "", "last_tokens": 0,
-                    "first_chunk_time": "",
-                }
-            else:
-                # Tool-call resumption — keep accumulator, invalidate
-                # any pending delayed sender by bumping send_version
-                state["tool_turns"] = state.get("tool_turns", 0) + 1
-                state["send_version"] = state.get("send_version", 0) + 1
-                tool_call_detected = True
-                debug(
-                    f"Tool call detected via msg_count "
-                    f"({saved_msg_count} → {current_msg_count}), "
-                    f"keeping {len(state['accumulated_text'])} chars buffered, "
-                    f"tool_turns={state['tool_turns']}, "
-                    f"send_version={state['send_version']}"
-                )
-
-        state["msg_count"] = current_msg_count
-
-        # ── Step 1: Accumulate text chunks ───────────────────────────
-        if chunk_text:
-            if not state.get("first_chunk_time"):
-                state["first_chunk_time"] = datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M:%S.%f"
-                )[:-3] + "Z"
-            state["accumulated_text"] += chunk_text
-            state["last_tokens"] = completion_tokens or state.get("last_tokens", 0)
-            save_stream_state(session_id, state)
-            debug(
-                f"Accumulated chunk: +{len(chunk_text)} chars, "
-                f"total={len(state['accumulated_text'])}"
-            )
-
-        # ── Step 1.5: functionCall/toolCall in response parts ────────
-        # Safety net: if Gemini CLI ever includes tool call data in the
-        # hook payload, detect it immediately and carry the accumulator.
-        is_tool_turn = has_tool_call or finish_reason in (
-            "TOOL_CALLS", "FUNCTION_CALL", "TOOL_USE",
-        )
-        if is_tool_turn:
-            state["tool_turns"] = state.get("tool_turns", 0) + 1
-            state["send_version"] = state.get("send_version", 0) + 1
-            save_stream_state(session_id, state)
-            debug(
-                f"Tool call detected via response parts "
-                f"(finish_reason={finish_reason}, has_tool_call={has_tool_call}), "
-                f"carrying accumulator, tool_turns={state['tool_turns']}"
-            )
-            print("{}")
-            sys.stdout.flush()
-            return
-
-        # ── Step 2: Detect completion and send ───────────────────────
-        # Don't send if we just detected a tool call via msg_count — the
-        # post-tool response hasn't arrived yet.
-        # Don't send if no new text was accumulated since the last delayed
-        # send — prevents redundant background processes for between-turn
-        # empty chunks.
-        has_new_text = (
-            len(state.get("accumulated_text", ""))
-            > state.get("last_send_text_len", 0)
-        )
-        should_send = (
-            not tool_call_detected
-            and has_new_text
-            and state["accumulated_text"]
-            and ((not chunk_text) or is_finished)
-        )
-
-        # Print response immediately so Gemini CLI can proceed
-        print("{}")
-        sys.stdout.flush()
-
-        if not should_send:
-            # Save state if tool call was detected (to persist send_version bump)
-            if tool_call_detected:
-                save_stream_state(session_id, state)
-            return
-
-        # Resolve credentials before deciding send strategy
-        api_key, base_url = resolve_credentials()
-        if not api_key:
-            log("ERROR", "No API key found. Run: respan auth login")
-            clear_stream_state(session_id)
-            return
-
-        final_prompt = usage.get("promptTokenCount", 0) or 0
-        final_completion = completion_tokens or state.get("last_tokens", 0)
-        final_total = usage.get("totalTokenCount", 0) or 0
-        tokens = {
-            "prompt_tokens": final_prompt,
-            "completion_tokens": final_completion,
-            "total_tokens": final_total or (final_prompt + final_completion),
-        }
-        config = load_respan_config()
-        spans = build_spans(
-            hook_data,
-            state["accumulated_text"],
-            tokens,
-            config,
-            start_time_iso=state.get("first_chunk_time"),
-        )
-
-        tool_turns = state.get("tool_turns", 0)
-
-        # Method b: text + STOP → send immediately.
-        # A text chunk with finishReason=STOP is never a tool-call boundary —
-        # tool calls produce empty chunks at the turn boundary.
-        if is_finished and chunk_text:
-            debug(
-                f"Immediate send (text+STOP, tool_turns={tool_turns}), "
-                f"sending {len(state['accumulated_text'])} chars"
-            )
-            send_spans(spans, api_key, base_url)
-            clear_stream_state(session_id)
-            return
-
-        # Method a: empty chunk after accumulated text.
-        # This MIGHT be a tool-call boundary (pre-tool turn ending), so we
-        # delay the send. If new text arrives before the delay fires
-        # (tool-call resumption), the send_version will have changed and the
-        # delayed sender will skip.
-        # If a delayed send is already pending (send_version > 0), just bump
-        # the version to replace the old sender with a fresh one.
-        state["send_version"] = state.get("send_version", 0) + 1
-        state["last_send_text_len"] = len(state["accumulated_text"])
-        save_stream_state(session_id, state)
-        debug(
-            f"Delayed send (version={state['send_version']}, "
-            f"tool_turns={tool_turns}, delay={SEND_DELAY}s), "
-            f"buffered {len(state['accumulated_text'])} chars"
-        )
-        launch_delayed_send(
-            session_id, state["send_version"],
-            spans, api_key, base_url,
-        )
+        with state_lock():
+            _process_chunk(hook_data)
 
     except json.JSONDecodeError as e:
         log("ERROR", f"Invalid JSON from stdin: {e}")

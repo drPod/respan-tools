@@ -55,23 +55,20 @@ curl -X POST "https://api.respan.ai/api/v1/traces/ingest" \
 - Send strategy: `text+STOP` chunks send immediately (method b). Empty chunks use a **delayed sender** (default 10s, configurable via `GEMINI_RESPAN_SEND_DELAY`) with version-based cancellation — if new text arrives before the delay fires, the pending send is invalidated.
 - Also checks for `functionCall`/`toolCall` parts in candidates as a safety net for future Gemini CLI versions.
 - Send happens in a detached subprocess (Gemini CLI may kill the hook process after reading `{}`)
-- Auth: Gemini CLI injects `RESPAN_API_KEY` from `.gemini/.env` into hook env; falls back to `~/.respan/credentials.json`
+- Auth: hook reads `RESPAN_API_KEY` (or `API_KEY`) from the process environment; if not set, falls back to `~/.respan/credentials.json` managed by `respan auth login`
 - Config: reads `~/.gemini/respan.json` for span name, customer ID, workflow name
 - Gemini uses `"role": "model"` in messages — hook maps this to `"assistant"` for the Respan API
 
 ### Known Gotchas
 
-- **Stale API key in `.gemini/.env`**: `respan integrate gemini-cli` bakes the API key into `$PROJECT/.gemini/.env`. If you rotate your key, update this file too. Symptom: hook gets 200 but data never appears.
+- **Missing or invalid auth configuration**: `respan integrate gemini-cli` does not write `.gemini/.env`. Ensure `RESPAN_API_KEY` is set in the environment for the Gemini CLI process, or that `~/.respan/credentials.json` contains a valid API key (from `respan auth login`). Symptom: hook log shows "No API key found" or data never appears.
 - **Long span IDs silently dropped**: Keep `trace_unique_id` and `span_unique_id` under 64 chars. The old `geminicli_geminicli_<uuid>_<timestamp>_gen` format (86 chars) was silently dropped by the ingest endpoint.
 - **Gemini role mapping**: Gemini CLI uses `"role": "model"` for assistant messages. The Respan API only accepts `user/assistant/system/tool/none/developer` — the hook maps `"model"` → `"assistant"`.
 
 ### Known Bugs (Low Priority — Not Blocking)
 
-These are minor config/metadata passthrough issues. Core tracing works correctly.
+These are minor backend/analytics quirks. Core tracing works correctly.
 
-- **`RESPAN_CUSTOMER_ID` env var not applied**: The hook reads `RESPAN_WORKFLOW_NAME` and `RESPAN_SPAN_NAME` but does not read `RESPAN_CUSTOMER_ID` to set `customer_identifier` on the span.
-- **`RESPAN_METADATA` env var not applied**: Custom metadata from the `RESPAN_METADATA` env var is ignored; only `{"source": "gemini-cli"}` appears in metadata.
-- **Custom keys from `respan.json` not merged into metadata**: Only known fields (`customer_id`, `span_name`, `workflow_name`) are read from `~/.gemini/respan.json`; extra keys like `custom_tag` are dropped instead of being merged into span metadata.
 - **`llm_call_count` always 0**: Backend does not count Gemini spans as LLM calls. This is a backend issue, not a hook bug.
 - **~~Tool use breaks the accumulator~~ (FIXED)**: The hook now detects tool calls via message count changes and uses a delayed sender with version-based cancellation. Text from before and after tool execution is combined into a single span. Tested with 7+ sequential tool turns. The `GEMINI_RESPAN_SEND_DELAY` env var (default 10s) controls the delay — increase for slow tools like web search.
 
