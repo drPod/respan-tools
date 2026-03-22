@@ -65,29 +65,12 @@ try:
         RESPAN_DOGFOOD_HEADER,
         resolve_tracing_ingest_endpoint,
     )
-    from respan_sdk.constants.llm_logging import (
-        LOG_TYPE_AGENT,
-        LOG_TYPE_CHAT,
-        LOG_TYPE_TOOL,
-    )
 except ImportError:
-    # Mirrors respan_sdk.constants.api_constants
     DEFAULT_RESPAN_API_BASE_URL = "https://api.respan.ai/api"
     TRACES_INGEST_PATH = "v1/traces/ingest"
-
-    # Mirrors respan_sdk.constants.tracing_constants
     RESPAN_DOGFOOD_HEADER = "X-Respan-Dogfood"
 
-    # Mirrors respan_sdk.constants.llm_logging
-    LOG_TYPE_AGENT = "agent"
-    LOG_TYPE_CHAT = "chat"
-    LOG_TYPE_TOOL = "tool"
-
     def resolve_tracing_ingest_endpoint(base_url=None):
-        """Build the tracing ingest endpoint URL.
-
-        Mirrors respan_sdk.constants.tracing_constants.resolve_tracing_ingest_endpoint.
-        """
         if not base_url:
             return f"{DEFAULT_RESPAN_API_BASE_URL}/{TRACES_INGEST_PATH}"
         normalized = base_url.rstrip("/")
@@ -95,32 +78,15 @@ except ImportError:
             return f"{normalized}/{TRACES_INGEST_PATH}"
         return f"{normalized}/api/{TRACES_INGEST_PATH}"
 
-# ── Hook-specific constants ──────────────────────────────────────
-
-# Provider ID for Gemini spans (matches Respan's provider registry)
-PROVIDER_GOOGLE = "google"
-
-# Gemini CLI uses "model" for the assistant role; the Respan API accepts only
-# the roles defined in respan_sdk.respan_types._internal_types.Message:
-# "user", "assistant", "system", "tool", "none", "developer"
-ROLE_ASSISTANT = "assistant"
-GEMINI_ROLE_MAP = {"model": ROLE_ASSISTANT}
-
-# Span ID prefix — keep short to stay under 64-char ingest limit.
-SPAN_ID_PREFIX = "gcli_"
-
-# Default workflow/span name when no config override is provided.
-DEFAULT_WORKFLOW_NAME = "gemini-cli"
-DEFAULT_SPAN_NAME = "gemini-cli"
-
-# Metadata source tag.
-METADATA_SOURCE = "gemini-cli"
-
 # Map Gemini CLI built-in tool function names to friendly display names,
 # matching the pattern used by the Codex hook (_tool_display_name).
+# Tool names from Gemini CLI docs:
+#   https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/index.md
+#   https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/file-system.md
+#   https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/web-search.md
+#   https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/web-fetch.md
 GEMINI_TOOL_DISPLAY_NAMES = {
     "read_file": "File Read",
-    "read_many_files": "File Read",
     "write_file": "File Write",
     "list_directory": "Directory List",
     "run_shell_command": "Shell",
@@ -128,27 +94,10 @@ GEMINI_TOOL_DISPLAY_NAMES = {
     "web_fetch": "Web Fetch",
     "glob": "Find Files",
     "grep_search": "Search Text",
+    "search_file_content": "Search Text",
     "replace": "File Edit",
-    "edit": "File Edit",
-    "memory": "Memory",
 }
 
-# Retry parameters for HTTP sends (mirrors RetryHandler defaults in
-# respan_sdk.utils.retry_handler).
-MAX_SEND_RETRIES = 3
-RETRY_DELAY_SECONDS = 1
-
-# Platform defaults that the v1/traces/ingest endpoint requires on every span.
-# Values mirror the field defaults in respan_sdk.respan_types.log_types.RespanLogParams.
-RESPAN_SPAN_DEFAULTS = {
-    "warnings": "",
-    "encoding_format": "float",        # RespanLogParams.encoding_format
-    "disable_fallback": False,         # RespanLogParams.disable_fallback
-    "field_name": "data: ",            # RespanLogParams.field_name
-    "delimiter": "\n\n",              # RespanLogParams.delimiter
-    "disable_log": False,              # RespanLogParams.disable_log
-    "request_breakdown": False,        # RespanLogParams.request_breakdown
-}
 
 # Configuration
 STATE_DIR = Path.home() / ".gemini" / "state"
@@ -161,13 +110,13 @@ try:
 except (ValueError, TypeError):
     MAX_CHARS = 4000
 
+# Gemini-specific: delay before sending on empty chunks, to allow tool-call
+# resumptions to cancel the pending send. Not needed by Claude/Codex hooks
+# since they process complete transcripts rather than per-chunk streaming.
 try:
     SEND_DELAY = int(os.environ.get("GEMINI_RESPAN_SEND_DELAY", "10"))
 except (ValueError, TypeError):
     SEND_DELAY = 10
-
-# Known config keys in respan.json that map to span fields.
-KNOWN_CONFIG_KEYS = {"customer_id", "span_name", "workflow_name", "project_id", "base_url"}
 
 
 def log(level: str, message: str) -> None:
@@ -224,8 +173,6 @@ def resolve_credentials() -> Tuple[Optional[str], str]:
         if cfg_base:
             base_url = cfg_base
 
-    # URL normalization is handled by resolve_tracing_ingest_endpoint() at the
-    # call site, so we return the raw base_url here.
     return api_key, base_url
 
 
@@ -233,7 +180,7 @@ def load_respan_config() -> Dict[str, Any]:
     """Load ~/.gemini/respan.json for span field overrides.
 
     Returns a dict with two keys:
-      - "fields": known span fields (customer_id, span_name, workflow_name, project_id)
+      - "fields": known span fields (customer_id, span_name, workflow_name)
       - "properties": everything else (custom properties -> metadata)
     """
     config_path = Path.home() / ".gemini" / "respan.json"
@@ -246,7 +193,7 @@ def load_respan_config() -> Dict[str, Any]:
         fields = {}
         properties = {}
         for k, v in raw.items():
-            if k in KNOWN_CONFIG_KEYS:
+            if k in {"customer_id", "span_name", "workflow_name", "base_url"}:
                 fields[k] = v
             else:
                 properties[k] = v
@@ -356,7 +303,9 @@ def extract_messages(
     formatted = []
 
     for msg in messages:
-        role = GEMINI_ROLE_MAP.get(msg.get("role", "user"), msg.get("role", "user"))
+        # Gemini uses "model" for assistant; Respan API only accepts "assistant"
+        raw_role = msg.get("role", "user")
+        role = "assistant" if raw_role == "model" else raw_role
         content = msg.get("content", "")
         formatted.append({
             "role": role,
@@ -375,7 +324,7 @@ def detect_model(hook_data: Dict[str, Any]) -> str:
     model = llm_req.get("model", "")
     if model:
         return model
-    return DEFAULT_WORKFLOW_NAME
+    return "gemini-cli"
 
 
 # ── Tool formatting (matches Codex hook pattern) ─────────────────
@@ -396,13 +345,13 @@ def _format_tool_input(tool_name: str, args: Any) -> str:
         if dir_path:
             result = f"[{dir_path}] {result}"
         return truncate(result)
-    if tool_name in ("read_file", "read_many_files", "write_file") and isinstance(args, dict):
+    if tool_name in ("read_file", "write_file") and isinstance(args, dict):
         return truncate(args.get("file_path", json.dumps(args, default=str)))
     if tool_name == "google_web_search" and isinstance(args, dict):
         return truncate(f"Query: {args.get('query', str(args))}")
     if tool_name == "web_fetch" and isinstance(args, dict):
         return truncate(args.get("url", str(args)))
-    if tool_name in ("glob", "grep_search") and isinstance(args, dict):
+    if tool_name in ("glob", "grep_search", "search_file_content") and isinstance(args, dict):
         return truncate(args.get("pattern", json.dumps(args, default=str)))
     if tool_name == "replace" and isinstance(args, dict):
         path = args.get("file_path", "")
@@ -457,21 +406,21 @@ def build_spans(
 
     # Messages — session context preserved for trace fidelity
     prompt_messages = extract_messages(hook_data)
-    completion_message: Dict[str, str] = {"role": ROLE_ASSISTANT, "content": truncate(output_text)}
+    completion_message: Dict[str, str] = {"role": "assistant", "content": truncate(output_text)}
 
     # Config overrides from respan.json
     cfg_fields = (config or {}).get("fields", {})
     cfg_props = (config or {}).get("properties", {})
 
     # IDs — keep under 64 chars to avoid silent drops on ingest.
-    # Longest suffix is "_tool_99" (8 chars) + SPAN_ID_PREFIX (5 chars) = 13.
+    # Longest suffix is "_tool_99" (8 chars) + "gcli_" (5 chars) = 13.
     safe_id = session_id.replace("/", "_").replace("\\", "_")[:50]
-    trace_unique_id = f"{SPAN_ID_PREFIX}{safe_id}"
-    root_span_id = f"{SPAN_ID_PREFIX}{safe_id}_root"
-    gen_span_id = f"{SPAN_ID_PREFIX}{safe_id}_gen"
-    workflow_name = os.environ.get("RESPAN_WORKFLOW_NAME") or cfg_fields.get("workflow_name") or DEFAULT_WORKFLOW_NAME
-    root_span_name = os.environ.get("RESPAN_SPAN_NAME") or cfg_fields.get("span_name") or DEFAULT_SPAN_NAME
-    thread_id = f"{SPAN_ID_PREFIX}{session_id}"
+    trace_unique_id = f"gcli_{safe_id}"
+    root_span_id = f"gcli_{safe_id}_root"
+    gen_span_id = f"gcli_{safe_id}_gen"
+    workflow_name = os.environ.get("RESPAN_WORKFLOW_NAME") or cfg_fields.get("workflow_name") or "gemini-cli"
+    root_span_name = os.environ.get("RESPAN_SPAN_NAME") or cfg_fields.get("span_name") or "gemini-cli"
+    thread_id = f"gcli_{session_id}"
     customer_id = os.environ.get("RESPAN_CUSTOMER_ID") or cfg_fields.get("customer_id") or ""
 
     # LLM config
@@ -479,7 +428,7 @@ def build_spans(
     req_config = llm_req.get("config", {})
 
     # Metadata — custom properties from respan.json, then env overrides
-    metadata: Dict[str, Any] = {"source": METADATA_SOURCE}
+    metadata: Dict[str, Any] = {"source": "gemini-cli"}
     if cfg_props:
         metadata.update(cfg_props)
     env_metadata = os.environ.get("RESPAN_METADATA")
@@ -510,7 +459,7 @@ def build_spans(
         "span_unique_id": root_span_id,
         "span_name": root_span_name,
         "span_workflow_name": workflow_name,
-        "log_type": LOG_TYPE_AGENT,
+        "log_type": "agent",
         "model": model,
         "provider_id": "",
         "span_path": "",
@@ -535,13 +484,16 @@ def build_spans(
         "span_workflow_name": workflow_name,
         "span_path": "gemini_chat",
         "model": model,
-        "provider_id": PROVIDER_GOOGLE,
-        "log_type": LOG_TYPE_CHAT,
+        "provider_id": "google",
+        "log_type": "chat",
         "metadata": {},
+        # Uses the current `input`/`output` fields (JSON-stringified messages).
+        # The codex and claude-code hooks still use the legacy approach:
+        #   "prompt_messages": prompt_messages,        # list of dicts
+        #   "completion_message": completion_message,   # dict
+        # See: https://respan.ai/docs/documentation/resources/reference/span-fields#prompt-messages
         "input": json.dumps(prompt_messages) if prompt_messages else "",
         "output": json.dumps(completion_message),
-        "prompt_messages": prompt_messages,
-        "completion_message": completion_message,
         "timestamp": end_time,
         "start_time": begin_time,
         "prompt_tokens": prompt_tokens,
@@ -564,7 +516,7 @@ def build_spans(
     if thoughts_tokens > 0:
         spans.append({
             "trace_unique_id": trace_unique_id,
-            "span_unique_id": f"{SPAN_ID_PREFIX}{safe_id}_reasoning",
+            "span_unique_id": f"gcli_{safe_id}_reasoning",
             "span_parent_id": root_span_id,
             "span_name": "Reasoning",
             "span_workflow_name": workflow_name,
@@ -596,12 +548,12 @@ def build_spans(
 
         spans.append({
             "trace_unique_id": trace_unique_id,
-            "span_unique_id": f"{SPAN_ID_PREFIX}{safe_id}_tool_{i}",
+            "span_unique_id": f"gcli_{safe_id}_tool_{i}",
             "span_parent_id": root_span_id,
             "span_name": f"Tool: {display_name}",
             "span_workflow_name": workflow_name,
             "span_path": f"tool_{tool_name}" if tool_name else "tool_call",
-            "log_type": LOG_TYPE_TOOL,
+            "log_type": "tool",
             "provider_id": "",
             "metadata": tool_meta,
             "input": tool_input,
@@ -610,10 +562,18 @@ def build_spans(
             "start_time": begin_time,
         })
 
-    # Apply platform defaults from RESPAN_SPAN_DEFAULTS (mirrors RespanLogParams)
-    # plus the runtime respan_params field.
+    # Apply platform defaults (matches Claude Code / Codex hooks).
+    respan_defaults = {
+        "warnings": "",
+        "encoding_format": "float",
+        "disable_fallback": False,
+        "field_name": "data: ",
+        "delimiter": "\n\n",
+        "disable_log": False,
+        "request_breakdown": False,
+    }
     for span in spans:
-        for key, value in RESPAN_SPAN_DEFAULTS.items():
+        for key, value in respan_defaults.items():
             if key not in span:
                 span[key] = value
         if "respan_params" not in span:
@@ -638,6 +598,9 @@ def send_spans(
     via ``subprocess.Popen`` so the HTTP request runs in a fully independent
     process (Gemini CLI may kill the hook after reading ``{}``).
     Uses ``urllib`` (stdlib) — no dependency on ``requests`` or external scripts.
+
+    Note: respan_sdk's RetryHandler uses exponential backoff with jitter, but
+    we just do flat 1s retries here to keep the inline subprocess script simple.
     """
     url = resolve_tracing_ingest_endpoint(base_url)
 
@@ -665,7 +628,7 @@ def send_spans(
         f"pf = Path({str(payload_file)!r})\n"
         "try:\n"
         "    data = pf.read_bytes()\n"
-        f"    for attempt in range({MAX_SEND_RETRIES}):\n"
+        "    for attempt in range(3):\n"
         "        try:\n"
         f"            req = Request({url!r}, data=data, headers={{\n"
         '                "Content-Type": "application/json",\n'
@@ -677,11 +640,11 @@ def send_spans(
         "        except HTTPError as e:\n"
         "            if e.code < 500:\n"
         "                break\n"
-        f"            if attempt < {MAX_SEND_RETRIES - 1}:\n"
-        f"                time.sleep({RETRY_DELAY_SECONDS})\n"
+        "            if attempt < 2:\n"
+        "                time.sleep(1)\n"
         "        except (URLError, OSError):\n"
-        f"            if attempt < {MAX_SEND_RETRIES - 1}:\n"
-        f"                time.sleep({RETRY_DELAY_SECONDS})\n"
+        "            if attempt < 2:\n"
+        "                time.sleep(1)\n"
         "finally:\n"
         "    pf.unlink(missing_ok=True)\n"
     )
@@ -765,7 +728,7 @@ try:
     _log(f"version matches ({send_version}), sending")
 
     data = payload_file.read_bytes()
-    for attempt in range({MAX_SEND_RETRIES}):
+    for attempt in range(3):
         try:
             req = Request({url!r}, data=data, headers={{
                 "Content-Type": "application/json",
@@ -779,13 +742,13 @@ try:
             if e.code < 500:
                 _log(f"client error {{e.code}}, not retrying")
                 break
-            if attempt < {MAX_SEND_RETRIES - 1}:
-                _log(f"server error {{e.code}}, retrying in {RETRY_DELAY_SECONDS}s")
-                time.sleep({RETRY_DELAY_SECONDS})
+            if attempt < 2:
+                _log(f"server error {{e.code}}, retrying in 1s")
+                time.sleep(1)
         except (URLError, OSError) as e:
-            if attempt < {MAX_SEND_RETRIES - 1}:
-                _log(f"connection error {{e}}, retrying in {RETRY_DELAY_SECONDS}s")
-                time.sleep({RETRY_DELAY_SECONDS})
+            if attempt < 2:
+                _log(f"connection error {{e}}, retrying in 1s")
+                time.sleep(1)
 
     # Clear state and payload now that we've sent
     state_file.unlink(missing_ok=True)
