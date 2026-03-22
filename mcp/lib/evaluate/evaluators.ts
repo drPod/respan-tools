@@ -1,18 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { RespanClient } from '@respan/respan-api';
-import { requireClient } from '../shared/client.js';
+import { requireClient, validatePathParam, type ToolDeps } from '../shared/client.js';
 
-export function registerEvaluatorTools(server: McpServer, client: RespanClient | null) {
+export function registerEvaluatorTools(server: McpServer, deps: ToolDeps) {
   server.tool(
     'list_evaluators',
-    'List all evaluators in your organization with pagination.',
-    {
-      page_size: z.number().optional().describe('Number of evaluators to return per page.'),
-      page: z.number().optional().describe('Page number for pagination.'),
-    },
+    'List all evaluators in your organization.',
+    {},
     async () => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
       const data = await c.evaluators.listEvaluators();
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
@@ -27,8 +23,9 @@ export function registerEvaluatorTools(server: McpServer, client: RespanClient |
       evaluator_id: z.string().describe('The unique identifier of the evaluator to retrieve.'),
     },
     async ({ evaluator_id }) => {
-      const c = requireClient(client);
-      const data = await c.evaluators.retrieveEvaluator({ evaluator_id });
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(evaluator_id, "evaluator_id");
+      const data = await c.evaluators.retrieveEvaluator({ evaluator_id: safeId });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
       };
@@ -83,7 +80,7 @@ export function registerEvaluatorTools(server: McpServer, client: RespanClient |
         .describe('Configuration specific to code-based evaluators.'),
     },
     async (params) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
       const data = await c.evaluators.createEvaluator(params);
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
@@ -120,7 +117,8 @@ export function registerEvaluatorTools(server: McpServer, client: RespanClient |
         .describe('Updated code-specific configuration.'),
     },
     async ({ evaluator_id, name, description, configurations, score_config, passing_conditions, llm_config, code_config }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(evaluator_id, "evaluator_id");
       const updateBody: Record<string, unknown> = {};
       if (name !== undefined) updateBody.name = name;
       if (description !== undefined) updateBody.description = description;
@@ -130,7 +128,7 @@ export function registerEvaluatorTools(server: McpServer, client: RespanClient |
       if (llm_config !== undefined) updateBody.llm_config = llm_config;
       if (code_config !== undefined) updateBody.code_config = code_config;
       const data = await c.evaluators.updateEvaluator({
-        evaluator_id,
+        evaluator_id: safeId,
         body: updateBody,
       });
       return {
@@ -155,13 +153,14 @@ export function registerEvaluatorTools(server: McpServer, client: RespanClient |
         .describe('Additional parameters for the evaluator run.'),
     },
     async ({ evaluator_id, dataset_id, log_ids, params }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(evaluator_id, "evaluator_id");
       const runBody: Record<string, unknown> = {};
       if (dataset_id !== undefined) runBody.dataset_id = dataset_id;
       if (log_ids !== undefined) runBody.log_ids = log_ids;
       if (params !== undefined) runBody.params = params;
       const data = await c.evaluators.runEvaluator({
-        evaluator_id,
+        evaluator_id: safeId,
         body: runBody,
       });
       return {

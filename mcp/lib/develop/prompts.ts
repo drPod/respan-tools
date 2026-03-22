@@ -1,9 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { RespanClient } from "@respan/respan-api";
-import { requireClient } from "../shared/client.js";
+import { requireClient, validatePathParam, respanRequest, type ToolDeps } from "../shared/client.js";
 
-export function registerPromptTools(server: McpServer, client: RespanClient | null) {
+export function registerPromptTools(server: McpServer, deps: ToolDeps) {
   // 1. List all Prompts
   server.tool(
     "list_prompts",
@@ -31,7 +30,9 @@ Use get_prompt_detail to see full prompt content, or list_prompt_versions to see
         .describe("Number of prompts per page (1-50, default 50)"),
     },
     async () => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      // SDK retrievePrompts() doesn't support pagination params;
+      // page_size is declared for schema compatibility with the reference implementation
       const data = await c.prompts.retrievePrompts();
       return {
         content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
@@ -70,9 +71,11 @@ Use list_prompts first to find the prompt_id.`,
       prompt_id: z.string().describe("Unique prompt identifier (from list_prompts)"),
     },
     async ({ prompt_id }) => {
-      const c = requireClient(client);
-      // SDK doesn't have a single-prompt retrieval; use retrievePrompts and filter
-      const data = await (c.prompts as any).retrievePrompts({ prompt_id });
+      if (!deps.auth) {
+        throw new Error("This tool requires authentication. Please set RESPAN_API_KEY.");
+      }
+      const safeId = validatePathParam(prompt_id, "prompt_id");
+      const data = await respanRequest(`prompts/${safeId}/`, deps.auth);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
       };
@@ -107,8 +110,9 @@ Use list_prompts first to find the prompt_id.`,
       prompt_id: z.string().describe("Unique prompt identifier (from list_prompts)"),
     },
     async ({ prompt_id }) => {
-      const c = requireClient(client);
-      const data = await c.prompts.retrieveVersions({ prompt_id });
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(prompt_id, "prompt_id");
+      const data = await c.prompts.retrieveVersions({ prompt_id: safeId });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
       };
@@ -151,9 +155,14 @@ Use list_prompts to find prompt_id, then list_prompt_versions to find the versio
         ),
     },
     async ({ prompt_id, version }) => {
-      const c = requireClient(client);
-      // SDK retrieveVersions handles both list and single retrieval via path
-      const data = await (c.prompts as any).retrieveVersions({ prompt_id, version: String(version) });
+      if (!deps.auth) {
+        throw new Error("This tool requires authentication. Please set RESPAN_API_KEY.");
+      }
+      const safePromptId = validatePathParam(prompt_id, "prompt_id");
+      const data = await respanRequest(
+        `prompts/${safePromptId}/versions/${version}/`,
+        deps.auth
+      );
       return {
         content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
       };
@@ -172,7 +181,7 @@ Use list_prompts to find prompt_id, then list_prompt_versions to find the versio
         .describe("Optional description of the prompt's purpose"),
     },
     async ({ name, description }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
       const data = await c.prompts.createPrompt({
         name,
         ...(description !== undefined ? { description } : {}),
@@ -196,12 +205,13 @@ Use list_prompts to find prompt_id, then list_prompt_versions to find the versio
         .describe("New description for the prompt"),
     },
     async ({ prompt_id, name, description }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(prompt_id, "prompt_id");
       const updateBody: Record<string, unknown> = {};
       if (name !== undefined) updateBody.name = name;
       if (description !== undefined) updateBody.description = description;
       const data = await c.prompts.updatePrompt({
-        prompt_id,
+        prompt_id: safeId,
         body: updateBody,
       });
       return {
@@ -248,10 +258,6 @@ Use list_prompts to find prompt_id, then list_prompt_versions to find the versio
         .number()
         .optional()
         .describe("Presence penalty (0.0-2.0)"),
-      stop: z
-        .array(z.string().describe("A stop sequence string"))
-        .optional()
-        .describe("Array of stop sequences"),
     },
     async ({
       prompt_id,
@@ -262,14 +268,15 @@ Use list_prompts to find prompt_id, then list_prompt_versions to find the versio
       top_p,
       frequency_penalty,
       presence_penalty,
-      stop,
     }) => {
-      const c = requireClient(client);
-      // createVersion uses flat params; messages is string[] (JSON-encoded message objects)
-      const messagesStr = messages.map((m: any) => JSON.stringify(m));
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(prompt_id, "prompt_id");
+      // SDK type says string[] but the API expects message objects.
+      // The SDK sends everything except prompt_id as the POST body directly,
+      // so we pass objects and cast to satisfy the SDK's incorrect type.
       const data = await c.prompts.createVersion({
-        prompt_id,
-        messages: messagesStr,
+        prompt_id: safeId,
+        messages: messages as any,
         model,
         ...(temperature !== undefined ? { temperature } : {}),
         ...(max_tokens !== undefined ? { max_tokens } : {}),
@@ -331,10 +338,6 @@ Use list_prompts to find prompt_id, then list_prompt_versions to find the versio
         .number()
         .optional()
         .describe("Updated presence penalty (0.0-2.0)"),
-      stop: z
-        .array(z.string().describe("A stop sequence string"))
-        .optional()
-        .describe("Updated array of stop sequences"),
     },
     async ({
       prompt_id,
@@ -346,9 +349,9 @@ Use list_prompts to find prompt_id, then list_prompt_versions to find the versio
       top_p,
       frequency_penalty,
       presence_penalty,
-      stop,
     }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(prompt_id, "prompt_id");
       const body: Record<string, unknown> = {
         deploy: false,
       };
@@ -359,10 +362,9 @@ Use list_prompts to find prompt_id, then list_prompt_versions to find the versio
       if (top_p !== undefined) body.top_p = top_p;
       if (frequency_penalty !== undefined) body.frequency_penalty = frequency_penalty;
       if (presence_penalty !== undefined) body.presence_penalty = presence_penalty;
-      if (stop !== undefined) body.stop = stop;
 
       const data = await c.prompts.updatePromptVersion({
-        prompt_id,
+        prompt_id: safeId,
         version: String(version),
         body,
       });

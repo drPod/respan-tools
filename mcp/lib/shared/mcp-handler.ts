@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { RespanClient } from '@respan/respan-api';
+import type { AuthConfig, ToolDeps } from './client.js';
 import { registerLogTools } from '../observe/logs.js';
 import { registerTraceTools } from '../observe/traces.js';
 import { registerUserTools } from '../observe/users.js';
@@ -10,19 +11,19 @@ import { registerExperimentTools } from '../develop/experiments.js';
 import { registerEvaluatorTools } from '../evaluate/evaluators.js';
 import { registerDatasetTools } from '../evaluate/datasets.js';
 
-function createServer(client: RespanClient | null): McpServer {
+function createServer(deps: ToolDeps): McpServer {
   const server = new McpServer({
     name: 'respan',
     version: '1.0.0',
   });
 
-  registerLogTools(server, client);
-  registerTraceTools(server, client);
-  registerUserTools(server, client);
-  registerPromptTools(server, client);
-  registerExperimentTools(server, client);
-  registerEvaluatorTools(server, client);
-  registerDatasetTools(server, client);
+  registerLogTools(server, deps);
+  registerTraceTools(server, deps);
+  registerUserTools(server, deps);
+  registerPromptTools(server, deps);
+  registerExperimentTools(server, deps);
+  registerEvaluatorTools(server, deps);
+  registerDatasetTools(server, deps);
 
   return server;
 }
@@ -35,7 +36,7 @@ function extractApiKey(req: VercelRequest): string | undefined {
   return process.env.RESPAN_API_KEY;
 }
 
-export function createMcpHandler(defaultBaseUrl: string, resourceMetadataPath: string) {
+export function createMcpHandler(defaultBaseUrl: string, _resourceMetadataPath: string) {
   return async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0');
     res.setHeader('CDN-Cache-Control', 'no-store');
@@ -60,18 +61,22 @@ export function createMcpHandler(defaultBaseUrl: string, resourceMetadataPath: s
       const apiKey = extractApiKey(req);
 
       let client: RespanClient | null = null;
+      let auth: AuthConfig | null = null;
+
       if (apiKey) {
         const baseUrl = (req.headers['respan-api-base-url'] as string)
           || process.env.RESPAN_API_BASE_URL
           || defaultBaseUrl;
 
+        auth = { token: apiKey, baseUrl };
         client = new RespanClient({
           token: apiKey,
           ...(baseUrl !== defaultBaseUrl ? { environment: baseUrl } : {}),
         });
       }
 
-      const server = createServer(client);
+      const deps: ToolDeps = { client, auth };
+      const server = createServer(deps);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });

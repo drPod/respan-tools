@@ -10,15 +10,17 @@ import { registerExperimentTools } from './dist/lib/develop/experiments.js';
 import { registerEvaluatorTools } from './dist/lib/evaluate/evaluators.js';
 import { registerDatasetTools } from './dist/lib/evaluate/datasets.js';
 
-function createServer(client) {
+const DEFAULT_BASE_URL = 'https://api.respan.ai/api';
+
+function createServer(deps) {
   const server = new McpServer({ name: 'respan', version: '1.0.0' });
-  registerLogTools(server, client);
-  registerTraceTools(server, client);
-  registerUserTools(server, client);
-  registerPromptTools(server, client);
-  registerExperimentTools(server, client);
-  registerEvaluatorTools(server, client);
-  registerDatasetTools(server, client);
+  registerLogTools(server, deps);
+  registerTraceTools(server, deps);
+  registerUserTools(server, deps);
+  registerPromptTools(server, deps);
+  registerExperimentTools(server, deps);
+  registerEvaluatorTools(server, deps);
+  registerDatasetTools(server, deps);
   return server;
 }
 
@@ -45,12 +47,16 @@ const httpServer = http.createServer(async (req, res) => {
       return res.status(401).json({ error: 'API key required' });
     }
 
-    const baseUrl = req.headers['respan-api-base-url'] || 'https://api.respan.ai/api';
-    console.log(`[LOCAL] respan-api-base-url header: ${req.headers['respan-api-base-url'] || '(not present)'}`);
-    console.log(`[LOCAL] Resolved baseUrl: ${baseUrl}`);
+    const baseUrl = req.headers['respan-api-base-url'] || DEFAULT_BASE_URL;
 
-    const client = new RespanClient({ token: apiKey, environment: baseUrl });
-    const server = createServer(client);
+    const auth = { token: apiKey, baseUrl };
+    const client = new RespanClient({
+      token: apiKey,
+      ...(baseUrl !== DEFAULT_BASE_URL ? { environment: baseUrl } : {}),
+    });
+    const deps = { client, auth };
+
+    const server = createServer(deps);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
     await server.connect(transport);

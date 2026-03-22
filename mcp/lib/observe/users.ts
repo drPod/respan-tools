@@ -1,10 +1,9 @@
 // lib/observe/users.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { RespanClient } from "@respan/respan-api";
-import { requireClient } from "../shared/client.js";
+import { requireClient, validatePathParam, type ToolDeps } from "../shared/client.js";
 
-export function registerUserTools(server: McpServer, client: RespanClient | null) {
+export function registerUserTools(server: McpServer, deps: ToolDeps) {
   // --- List Customers ---
   server.tool(
     "list_customers",
@@ -41,16 +40,17 @@ Use this to identify top users by cost, most active users, or find specific cust
       sort_by: z.enum(["customer_identifier", "-customer_identifier", "email", "-email", "first_seen", "-first_seen", "last_active_timeframe", "-last_active_timeframe", "number_of_requests", "-number_of_requests", "total_cost", "-total_cost", "total_tokens", "-total_tokens", "active_days", "-active_days", "average_latency", "-average_latency", "average_ttft", "-average_ttft"]).optional().describe("Sort field. Prefix with - for descending order."),
       environment: z.string().optional().describe("Filter by environment: 'prod' or 'test'")
     },
-    async ({ page_size = 20, page = 1, sort_by = "-first_seen", environment }) => {
-      const c = requireClient(client);
-      const data = await c.users.list({
+    async ({ page_size = 20, page: pageNum = 1, sort_by = "-first_seen", environment }) => {
+      const c = requireClient(deps.client);
+      const paginated = await c.users.list({
         page_size: Math.min(page_size, 50),
-        page,
+        page: pageNum,
         sort_by,
         ...(environment ? { environment } : {}),
       });
 
-      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+      // SDK returns a Page object; extract the raw API response (count, next, results)
+      return { content: [{ type: "text" as const, text: JSON.stringify(paginated.response, null, 2) }] };
     }
   );
 
@@ -105,9 +105,10 @@ Use list_customers first to find customer_identifier, then use this for full det
       environment: z.string().optional().describe("Environment: 'prod' or 'test' (default: 'prod')")
     },
     async ({ customer_identifier, environment }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(customer_identifier, "customer_identifier");
       const data = await c.users.retrieveUser({
-        customer_identifier,
+        customer_identifier: safeId,
         ...(environment ? { environment } : {}),
       });
 

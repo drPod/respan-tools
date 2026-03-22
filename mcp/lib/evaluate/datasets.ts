@@ -1,18 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { RespanClient } from '@respan/respan-api';
-import { requireClient } from '../shared/client.js';
+import { requireClient, validatePathParam, type ToolDeps } from '../shared/client.js';
 
-export function registerDatasetTools(server: McpServer, client: RespanClient | null) {
+export function registerDatasetTools(server: McpServer, deps: ToolDeps) {
   server.tool(
     'list_datasets',
     'List all datasets in your organization.',
-    {
-      page_size: z.number().optional().default(50).describe('Number of datasets to return per page. Defaults to 50.'),
-      page: z.number().optional().describe('Page number for pagination.'),
-    },
+    {},
     async () => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
       const data = await c.datasets.listDatasets();
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
@@ -27,8 +23,9 @@ export function registerDatasetTools(server: McpServer, client: RespanClient | n
       dataset_id: z.string().describe('The unique identifier of the dataset to retrieve.'),
     },
     async ({ dataset_id }) => {
-      const c = requireClient(client);
-      const data = await c.datasets.retrieveDataset({ dataset_id });
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(dataset_id, "dataset_id");
+      const data = await c.datasets.retrieveDataset({ dataset_id: safeId });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
       };
@@ -43,7 +40,7 @@ export function registerDatasetTools(server: McpServer, client: RespanClient | n
       description: z.string().optional().describe('A description of the dataset.'),
     },
     async (params) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
       const data = await c.datasets.createDataset(params);
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
@@ -60,12 +57,13 @@ export function registerDatasetTools(server: McpServer, client: RespanClient | n
       description: z.string().optional().describe('Updated description for the dataset.'),
     },
     async ({ dataset_id, name, description }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(dataset_id, "dataset_id");
       const updateBody: Record<string, unknown> = {};
       if (name !== undefined) updateBody.name = name;
       if (description !== undefined) updateBody.description = description;
       const data = await c.datasets.updateDataset({
-        dataset_id,
+        dataset_id: safeId,
         body: updateBody,
       });
       return {
@@ -81,8 +79,9 @@ export function registerDatasetTools(server: McpServer, client: RespanClient | n
       dataset_id: z.string().describe('The unique identifier of the dataset.'),
     },
     async ({ dataset_id }) => {
-      const c = requireClient(client);
-      const data = await c.datasets.listspans({ dataset_id });
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(dataset_id, "dataset_id");
+      const data = await c.datasets.listspans({ dataset_id: safeId });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
       };
@@ -100,9 +99,10 @@ export function registerDatasetTools(server: McpServer, client: RespanClient | n
         .describe('Filter criteria to apply when listing spans.'),
     },
     async ({ dataset_id, filters }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(dataset_id, "dataset_id");
       const data = await c.datasets.listspanswithfilters({
-        dataset_id,
+        dataset_id: safeId,
         body: filters ?? {},
       });
       return {
@@ -121,9 +121,10 @@ export function registerDatasetTools(server: McpServer, client: RespanClient | n
       metadata: z.record(z.any()).optional().describe('Optional metadata key-value pairs.'),
     },
     async ({ dataset_id, input, output, metadata }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(dataset_id, "dataset_id");
       const data = await c.datasets.createDatasetSpan({
-        dataset_id,
+        dataset_id: safeId,
         input,
         output,
         ...(metadata ? { metadata } : {}),
@@ -142,8 +143,10 @@ export function registerDatasetTools(server: McpServer, client: RespanClient | n
       log_id: z.string().describe('The unique identifier of the span/log to retrieve.'),
     },
     async ({ dataset_id, log_id }) => {
-      const c = requireClient(client);
-      const data = await c.datasets.retrievespan({ dataset_id, log_id });
+      const c = requireClient(deps.client);
+      const safeDatasetId = validatePathParam(dataset_id, "dataset_id");
+      const safeLogId = validatePathParam(log_id, "log_id");
+      const data = await c.datasets.retrievespan({ dataset_id: safeDatasetId, log_id: safeLogId });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
       };
@@ -161,8 +164,10 @@ export function registerDatasetTools(server: McpServer, client: RespanClient | n
         .describe('The fields to update on the span.'),
     },
     async ({ dataset_id, log_id, body }) => {
-      const c = requireClient(client);
-      const data = await c.datasets.updateSpanPartial({ dataset_id, log_id, body });
+      const c = requireClient(deps.client);
+      const safeDatasetId = validatePathParam(dataset_id, "dataset_id");
+      const safeLogId = validatePathParam(log_id, "log_id");
+      const data = await c.datasets.updateSpanPartial({ dataset_id: safeDatasetId, log_id: safeLogId, body });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
       };
@@ -179,9 +184,10 @@ export function registerDatasetTools(server: McpServer, client: RespanClient | n
         .describe('Array of existing span IDs to add to the dataset.'),
     },
     async ({ dataset_id, span_ids }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(dataset_id, "dataset_id");
       const data = await c.datasets.addSpansToDataset({
-        dataset_id,
+        dataset_id: safeId,
         body: { span_ids },
       });
       return {

@@ -1,10 +1,9 @@
 // lib/observe/logs.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { RespanClient } from "@respan/respan-api";
-import { requireClient } from "../shared/client.js";
+import { requireClient, validatePathParam, type ToolDeps } from "../shared/client.js";
 
-export function registerLogTools(server: McpServer, client: RespanClient | null) {
+export function registerLogTools(server: McpServer, deps: ToolDeps) {
   // --- List Logs ---
   server.tool(
     "list_logs",
@@ -58,8 +57,8 @@ EXAMPLE - find logs for a specific model and customer:
       })).optional().describe("Array of server-side filters. Each filter has field, operator, and value. Example: [{\"field\": \"status_code\", \"operator\": \"not\", \"value\": [200]}]"),
       include_fields: z.array(z.string()).optional().describe("Fields to include in response. Defaults to summary fields (unique_id, model, cost, status_code, latency, timestamp, customer_identifier, prompt_tokens, completion_tokens, status, error_message, log_type). Use get_log_detail for full log data.")
     },
-    async ({ page_size = 20, page = 1, sort_by = "-id", start_time, end_time, is_test, all_envs, filters, include_fields }) => {
-      const c = requireClient(client);
+    async ({ page_size = 20, page: pageNum = 1, sort_by = "-id", start_time, end_time, is_test, all_envs, filters, include_fields }) => {
+      const c = requireClient(deps.client);
       const limit = Math.min(page_size, 50);
 
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
@@ -86,13 +85,13 @@ EXAMPLE - find logs for a specific model and customer:
         }
       }
 
-      const data = await c.logs.listSpans({
+      const page = await c.logs.listSpans({
         start_time: clampedStart,
         end_time: end_time || new Date().toISOString(),
         sort_by,
         operator: "",
         page_size: limit,
-        page,
+        page: pageNum,
         is_test: is_test !== undefined ? String(is_test) : undefined,
         all_envs: all_envs !== undefined ? String(all_envs) : undefined,
         fetch_filters: "false",
@@ -100,7 +99,8 @@ EXAMPLE - find logs for a specific model and customer:
         filters: Object.keys(bodyFilters).length > 0 ? bodyFilters : undefined,
       });
 
-      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+      // SDK returns a Page object; extract the raw API response (count, next, results)
+      return { content: [{ type: "text" as const, text: JSON.stringify(page.response, null, 2) }] };
     }
   );
 
@@ -130,8 +130,9 @@ Use list_logs first to find the unique_id, then use this endpoint for full detai
       log_id: z.string().describe("Unique identifier of the log (unique_id field from list_logs)")
     },
     async ({ log_id }) => {
-      const c = requireClient(client);
-      const data = await c.logs.retrieveSpan({ unique_id: log_id });
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(log_id, "log_id");
+      const data = await c.logs.retrieveSpan({ unique_id: safeId });
       return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
     }
   );
@@ -255,7 +256,7 @@ Note: Maximum log size is 20MB including all fields.`,
       positive_feedback: z.boolean().optional().describe("User feedback (true = positive)")
     },
     async (params) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
       const data = await c.logs.createSpan(params as any);
       return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
     }
@@ -296,7 +297,7 @@ EXAMPLE:
       })).optional().describe("Server-side filters in backend format. Example: { \"model\": { \"operator\": \"\", \"value\": [\"gpt-4o\"] } }")
     },
     async ({ start_time, end_time, filters }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
       const data = await c.logs.getSpansSummary({
         start_time,
         end_time,

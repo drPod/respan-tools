@@ -1,10 +1,9 @@
 // lib/observe/traces.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { RespanClient } from "@respan/respan-api";
-import { requireClient } from "../shared/client.js";
+import { requireClient, validatePathParam, type ToolDeps } from "../shared/client.js";
 
-export function registerTraceTools(server: McpServer, client: RespanClient | null) {
+export function registerTraceTools(server: McpServer, deps: ToolDeps) {
   // --- List Traces ---
   server.tool(
     "list_traces",
@@ -72,7 +71,7 @@ RESPONSE FIELDS:
       })).optional().describe("Array of server-side filters. Each filter has field, operator, and value. Example: [{\"field\": \"error_count\", \"operator\": \"gt\", \"value\": [0]}]")
     },
     async ({ page_size = 10, page = 1, sort_by = "-timestamp", start_time, end_time, environment, filters }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
       const limit = Math.min(page_size, 20);
 
       // Convert filters array to the backend body format: { field: { operator, value } }
@@ -154,14 +153,15 @@ Use list_traces first to find trace_unique_id, then use this for full span tree.
       end_time: z.string().optional().describe("End time filter in ISO 8601 format")
     },
     async ({ trace_id, environment, start_time, end_time }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
+      const safeId = validatePathParam(trace_id, "trace_id");
       const queryParams: Record<string, any> = {};
       if (environment) queryParams.environment = environment;
       if (start_time) queryParams.start_time = start_time;
       if (end_time) queryParams.end_time = end_time;
 
       const data = await c.traces.retrieveTrace(
-        { trace_unique_id: trace_id },
+        { trace_unique_id: safeId },
         { queryParams }
       );
 
@@ -200,7 +200,7 @@ EXAMPLE:
       end_time: z.string().describe("End time in ISO 8601 format")
     },
     async ({ start_time, end_time }) => {
-      const c = requireClient(client);
+      const c = requireClient(deps.client);
       const data = await c.traces.retrieveTracesSummary(
         {},
         {
