@@ -570,15 +570,15 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
 def _log(msg):
-    if "{debug_flag}" == "1":
+    if {debug_flag!r} == "1":
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open("{log_path}", "a") as f:
+        with open({log_path!r}, "a") as f:
             f.write(f"{{ts}} [DEBUG] delayed_send: {{msg}}\\n")
 
 time.sleep({SEND_DELAY})
 
-state_file = Path("{state_file_path}")
-payload_file = Path("{str(payload_file)}")
+state_file = Path({state_file_path!r})
+payload_file = Path({str(payload_file)!r})
 
 try:
     if not state_file.exists():
@@ -599,7 +599,7 @@ try:
     data = payload_file.read_bytes()
     for attempt in range(3):
         try:
-            req = Request("{url}", data=data, headers={{
+            req = Request({url!r}, data=data, headers={{
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + os.environ.get("RESPAN_API_KEY", ""),
             }})
@@ -754,8 +754,10 @@ def _process_chunk(hook_data: Dict[str, Any]) -> None:
         len(state.get("accumulated_text", ""))
         > state.get("last_send_text_len", 0)
     )
+    # Allow sending when is_finished even if tool_call_detected on the same
+    # chunk (e.g. tool-call resumption completes in a single text+STOP chunk).
     should_send = (
-        not tool_call_detected
+        (not tool_call_detected or is_finished)
         and has_new_text
         and state["accumulated_text"]
         and ((not chunk_text) or is_finished)

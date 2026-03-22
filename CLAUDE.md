@@ -55,7 +55,7 @@ curl -X POST "https://api.respan.ai/api/v1/traces/ingest" \
 - Send strategy: `text+STOP` chunks send immediately (method b). Empty chunks use a **delayed sender** (default 10s, configurable via `GEMINI_RESPAN_SEND_DELAY`) with version-based cancellation — if new text arrives before the delay fires, the pending send is invalidated.
 - Also checks for `functionCall`/`toolCall` parts in candidates as a safety net for future Gemini CLI versions.
 - Send happens in a detached subprocess (Gemini CLI may kill the hook process after reading `{}`)
-- Auth: hook reads `RESPAN_API_KEY` (or `API_KEY`) from the process environment; if not set, falls back to `~/.respan/credentials.json` managed by `respan auth login`
+- Auth: hook reads `RESPAN_API_KEY` from the process environment; if not set, falls back to `~/.respan/credentials.json` managed by `respan auth login`
 - Config: reads `~/.gemini/respan.json` for span name, customer ID, workflow name
 - Gemini uses `"role": "model"` in messages — hook maps this to `"assistant"` for the Respan API
 

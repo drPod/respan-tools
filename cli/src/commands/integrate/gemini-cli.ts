@@ -12,6 +12,7 @@ import {
   getGeminiHookScript,
   resolveScope,
   findProjectRoot,
+  DEFAULT_BASE_URL,
 } from '../../lib/integrate.js';
 
 export default class IntegrateGeminiCli extends BaseCommand {
@@ -108,7 +109,7 @@ Note: Gemini CLI ignores workspace-level telemetry settings, so
       const newConfig: Record<string, unknown> = { ...respanConfig };
 
       const baseUrl = flags['base-url'];
-      if (baseUrl && baseUrl !== 'https://api.respan.ai/api') {
+      if (baseUrl && baseUrl !== DEFAULT_BASE_URL) {
         newConfig.base_url = baseUrl;
       }
       if (customerId) newConfig.customer_id = customerId;
