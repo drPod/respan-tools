@@ -51,6 +51,88 @@ try:
 except ImportError:
     fcntl = None  # Not available on Windows
 
+# ── SDK constants (import with fallback for standalone deployment) ─
+# When the hook is pip-installed alongside respan-sdk, these come from the
+# canonical source.  When deployed as a standalone script (the common case for
+# `respan integrate gemini-cli`), the except branch provides local copies that
+# mirror the SDK values exactly.
+try:
+    from respan_sdk.constants.api_constants import (
+        DEFAULT_RESPAN_API_BASE_URL,
+        TRACES_INGEST_PATH,
+    )
+    from respan_sdk.constants.tracing_constants import (
+        RESPAN_DOGFOOD_HEADER,
+        resolve_tracing_ingest_endpoint,
+    )
+    from respan_sdk.constants.llm_logging import (
+        LOG_TYPE_AGENT,
+        LOG_TYPE_CHAT,
+        LOG_TYPE_TOOL,
+    )
+except ImportError:
+    # Mirrors respan_sdk.constants.api_constants
+    DEFAULT_RESPAN_API_BASE_URL = "https://api.respan.ai/api"
+    TRACES_INGEST_PATH = "v1/traces/ingest"
+
+    # Mirrors respan_sdk.constants.tracing_constants
+    RESPAN_DOGFOOD_HEADER = "X-Respan-Dogfood"
+
+    # Mirrors respan_sdk.constants.llm_logging
+    LOG_TYPE_AGENT = "agent"
+    LOG_TYPE_CHAT = "chat"
+    LOG_TYPE_TOOL = "tool"
+
+    def resolve_tracing_ingest_endpoint(base_url=None):
+        """Build the tracing ingest endpoint URL.
+
+        Mirrors respan_sdk.constants.tracing_constants.resolve_tracing_ingest_endpoint.
+        """
+        if not base_url:
+            return f"{DEFAULT_RESPAN_API_BASE_URL}/{TRACES_INGEST_PATH}"
+        normalized = base_url.rstrip("/")
+        if normalized.endswith("/api"):
+            return f"{normalized}/{TRACES_INGEST_PATH}"
+        return f"{normalized}/api/{TRACES_INGEST_PATH}"
+
+# ── Hook-specific constants ──────────────────────────────────────
+
+# Provider ID for Gemini spans (matches Respan's provider registry)
+PROVIDER_GOOGLE = "google"
+
+# Gemini CLI uses "model" for the assistant role; the Respan API accepts only
+# the roles defined in respan_sdk.respan_types._internal_types.Message:
+# "user", "assistant", "system", "tool", "none", "developer"
+ROLE_ASSISTANT = "assistant"
+GEMINI_ROLE_MAP = {"model": ROLE_ASSISTANT}
+
+# Span ID prefix — keep short to stay under 64-char ingest limit.
+SPAN_ID_PREFIX = "gcli_"
+
+# Default workflow/span name when no config override is provided.
+DEFAULT_WORKFLOW_NAME = "gemini-cli"
+DEFAULT_SPAN_NAME = "gemini-cli"
+
+# Metadata source tag.
+METADATA_SOURCE = "gemini-cli"
+
+# Retry parameters for HTTP sends (mirrors RetryHandler defaults in
+# respan_sdk.utils.retry_handler).
+MAX_SEND_RETRIES = 3
+RETRY_DELAY_SECONDS = 1
+
+# Platform defaults that the v1/traces/ingest endpoint requires on every span.
+# Values mirror the field defaults in respan_sdk.respan_types.log_types.RespanLogParams.
+RESPAN_SPAN_DEFAULTS = {
+    "warnings": "",
+    "encoding_format": "float",        # RespanLogParams.encoding_format
+    "disable_fallback": False,         # RespanLogParams.disable_fallback
+    "field_name": "data: ",            # RespanLogParams.field_name
+    "delimiter": "\n\n",              # RespanLogParams.delimiter
+    "disable_log": False,              # RespanLogParams.disable_log
+    "request_breakdown": False,        # RespanLogParams.request_breakdown
+}
+
 # Configuration
 STATE_DIR = Path.home() / ".gemini" / "state"
 LOG_FILE = STATE_DIR / "respan_hook.log"
@@ -97,7 +179,7 @@ def resolve_credentials() -> Tuple[Optional[str], str]:
     Matches the credential resolution used by the Claude Code and Codex CLI hooks.
     """
     api_key = os.getenv("RESPAN_API_KEY")
-    base_url = os.getenv("RESPAN_BASE_URL", "https://api.respan.ai/api")
+    base_url = os.getenv("RESPAN_BASE_URL", DEFAULT_RESPAN_API_BASE_URL)
 
     if not api_key:
         creds_file = Path.home() / ".respan" / "credentials.json"
@@ -111,7 +193,7 @@ def resolve_credentials() -> Tuple[Optional[str], str]:
                     profile = cfg.get("activeProfile", "default")
                 cred = creds.get(profile, {})
                 api_key = cred.get("apiKey") or cred.get("accessToken")
-                if not base_url or base_url == "https://api.respan.ai/api":
+                if not base_url or base_url == DEFAULT_RESPAN_API_BASE_URL:
                     base_url = cred.get("baseUrl", base_url)
                 if api_key:
                     debug(f"Using API key from credentials.json (profile: {profile})")
@@ -119,16 +201,14 @@ def resolve_credentials() -> Tuple[Optional[str], str]:
                 debug(f"Failed to read credentials.json: {e}")
 
     # Also check respan.json for base_url (written by `respan integrate gemini-cli --base-url`)
-    if not base_url or base_url == "https://api.respan.ai/api":
+    if not base_url or base_url == DEFAULT_RESPAN_API_BASE_URL:
         config = load_respan_config()
         cfg_base = config.get("fields", {}).get("base_url", "")
         if cfg_base:
             base_url = cfg_base
 
-    # Always ensure base_url ends with /api
-    if base_url and not base_url.rstrip("/").endswith("/api"):
-        base_url = base_url.rstrip("/") + "/api"
-
+    # URL normalization is handled by resolve_tracing_ingest_endpoint() at the
+    # call site, so we return the raw base_url here.
     return api_key, base_url
 
 
@@ -258,11 +338,8 @@ def extract_messages(
     messages = llm_req.get("messages", [])
     formatted = []
 
-    # Gemini uses "model" for assistant messages — map to standard roles
-    role_map = {"model": "assistant"}
-
     for msg in messages:
-        role = role_map.get(msg.get("role", "user"), msg.get("role", "user"))
+        role = GEMINI_ROLE_MAP.get(msg.get("role", "user"), msg.get("role", "user"))
         content = msg.get("content", "")
         formatted.append({
             "role": role,
@@ -281,7 +358,7 @@ def detect_model(hook_data: Dict[str, Any]) -> str:
     model = llm_req.get("model", "")
     if model:
         return model
-    return "gemini-cli"
+    return DEFAULT_WORKFLOW_NAME
 
 
 # ── Span construction ────────────────────────────────────────────
@@ -320,21 +397,21 @@ def build_spans(
 
     # Messages — session context preserved for trace fidelity
     prompt_messages = extract_messages(hook_data)
-    completion_message: Dict[str, str] = {"role": "assistant", "content": truncate(output_text)}
+    completion_message: Dict[str, str] = {"role": ROLE_ASSISTANT, "content": truncate(output_text)}
 
     # Config overrides from respan.json
     cfg_fields = (config or {}).get("fields", {})
     cfg_props = (config or {}).get("properties", {})
 
     # IDs — keep under 64 chars to avoid silent drops on ingest.
-    # Longest suffix is "_tool_99" (8 chars) + prefix "gcli_" (5 chars) = 13.
+    # Longest suffix is "_tool_99" (8 chars) + SPAN_ID_PREFIX (5 chars) = 13.
     safe_id = session_id.replace("/", "_").replace("\\", "_")[:50]
-    trace_unique_id = f"gcli_{safe_id}"
-    root_span_id = f"gcli_{safe_id}_root"
-    gen_span_id = f"gcli_{safe_id}_gen"
-    workflow_name = os.environ.get("RESPAN_WORKFLOW_NAME") or cfg_fields.get("workflow_name") or "gemini-cli"
-    root_span_name = os.environ.get("RESPAN_SPAN_NAME") or cfg_fields.get("span_name") or "gemini-cli"
-    thread_id = f"gcli_{session_id}"
+    trace_unique_id = f"{SPAN_ID_PREFIX}{safe_id}"
+    root_span_id = f"{SPAN_ID_PREFIX}{safe_id}_root"
+    gen_span_id = f"{SPAN_ID_PREFIX}{safe_id}_gen"
+    workflow_name = os.environ.get("RESPAN_WORKFLOW_NAME") or cfg_fields.get("workflow_name") or DEFAULT_WORKFLOW_NAME
+    root_span_name = os.environ.get("RESPAN_SPAN_NAME") or cfg_fields.get("span_name") or DEFAULT_SPAN_NAME
+    thread_id = f"{SPAN_ID_PREFIX}{session_id}"
     customer_id = os.environ.get("RESPAN_CUSTOMER_ID") or cfg_fields.get("customer_id") or ""
 
     # LLM config
@@ -342,7 +419,7 @@ def build_spans(
     req_config = llm_req.get("config", {})
 
     # Metadata — custom properties from respan.json, then env overrides
-    metadata: Dict[str, Any] = {"source": "gemini-cli"}
+    metadata: Dict[str, Any] = {"source": METADATA_SOURCE}
     if cfg_props:
         metadata.update(cfg_props)
     env_metadata = os.environ.get("RESPAN_METADATA")
@@ -371,6 +448,7 @@ def build_spans(
         "span_unique_id": root_span_id,
         "span_name": root_span_name,
         "span_workflow_name": workflow_name,
+        "log_type": LOG_TYPE_AGENT,
         "model": model,
         "provider_id": "",
         "span_path": "",
@@ -395,8 +473,8 @@ def build_spans(
         "span_workflow_name": workflow_name,
         "span_path": "gemini_chat",
         "model": model,
-        "provider_id": "google",
-        "log_type": "chat",
+        "provider_id": PROVIDER_GOOGLE,
+        "log_type": LOG_TYPE_CHAT,
         "metadata": {},
         "input": json.dumps(prompt_messages) if prompt_messages else "",
         "output": json.dumps(completion_message),
@@ -423,11 +501,12 @@ def build_spans(
     for i in range(1, tool_turns + 1):
         spans.append({
             "trace_unique_id": trace_unique_id,
-            "span_unique_id": f"gcli_{safe_id}_tool_{i}",
+            "span_unique_id": f"{SPAN_ID_PREFIX}{safe_id}_tool_{i}",
             "span_parent_id": root_span_id,
             "span_name": f"Tool: Call {i}",
             "span_workflow_name": workflow_name,
             "span_path": "tool_call",
+            "log_type": LOG_TYPE_TOOL,
             "provider_id": "",
             "metadata": {},
             "input": "",
@@ -436,24 +515,17 @@ def build_spans(
             "start_time": begin_time,
         })
 
-    # Platform defaults (must match Claude Code / Codex hooks exactly)
-    respan_defaults = {
-        "warnings": "",
-        "encoding_format": "float",
-        "disable_fallback": False,
-        "respan_params": {
-            "has_webhook": False,
-            "environment": os.environ.get("RESPAN_ENVIRONMENT", "prod"),
-        },
-        "field_name": "data: ",
-        "delimiter": "\n\n",
-        "disable_log": False,
-        "request_breakdown": False,
-    }
+    # Apply platform defaults from RESPAN_SPAN_DEFAULTS (mirrors RespanLogParams)
+    # plus the runtime respan_params field.
     for span in spans:
-        for key, value in respan_defaults.items():
+        for key, value in RESPAN_SPAN_DEFAULTS.items():
             if key not in span:
                 span[key] = value
+        if "respan_params" not in span:
+            span["respan_params"] = {
+                "has_webhook": False,
+                "environment": os.environ.get("RESPAN_ENVIRONMENT", "prod"),
+            }
 
     return spans
 
@@ -472,7 +544,7 @@ def send_spans(
     process (Gemini CLI may kill the hook after reading ``{}``).
     Uses ``urllib`` (stdlib) — no dependency on ``requests`` or external scripts.
     """
-    url = f"{base_url}/v1/traces/ingest"
+    url = resolve_tracing_ingest_endpoint(base_url)
 
     span_names = [s.get("span_name", "?") for s in spans]
     debug(f"Sending {len(spans)} span(s) to {url}: {span_names}")
@@ -498,10 +570,11 @@ def send_spans(
         f"pf = Path({str(payload_file)!r})\n"
         "try:\n"
         "    data = pf.read_bytes()\n"
-        "    for attempt in range(3):\n"
+        f"    for attempt in range({MAX_SEND_RETRIES}):\n"
         "        try:\n"
         f"            req = Request({url!r}, data=data, headers={{\n"
         '                "Content-Type": "application/json",\n'
+        f'                "{RESPAN_DOGFOOD_HEADER}": "1",\n'
         '                "Authorization": "Bearer " + os.environ["RESPAN_API_KEY"],\n'
         "            })\n"
         "            urlopen(req, timeout=30)\n"
@@ -509,11 +582,11 @@ def send_spans(
         "        except HTTPError as e:\n"
         "            if e.code < 500:\n"
         "                break\n"
-        "            if attempt < 2:\n"
-        "                time.sleep(1)\n"
+        f"            if attempt < {MAX_SEND_RETRIES - 1}:\n"
+        f"                time.sleep({RETRY_DELAY_SECONDS})\n"
         "        except (URLError, OSError):\n"
-        "            if attempt < 2:\n"
-        "                time.sleep(1)\n"
+        f"            if attempt < {MAX_SEND_RETRIES - 1}:\n"
+        f"                time.sleep({RETRY_DELAY_SECONDS})\n"
         "finally:\n"
         "    pf.unlink(missing_ok=True)\n"
     )
@@ -557,7 +630,7 @@ def launch_delayed_send(
     state_file_path = str(_state_path(session_id))
     log_path = str(LOG_FILE)
     debug_flag = "1" if DEBUG else "0"
-    url = f"{base_url}/v1/traces/ingest"
+    url = resolve_tracing_ingest_endpoint(base_url)
 
     # Inline script: sleep, check version, then POST with urllib (stdlib).
     # API key is received via RESPAN_API_KEY env var — never interpolated
@@ -597,10 +670,11 @@ try:
     _log(f"version matches ({send_version}), sending")
 
     data = payload_file.read_bytes()
-    for attempt in range(3):
+    for attempt in range({MAX_SEND_RETRIES}):
         try:
             req = Request({url!r}, data=data, headers={{
                 "Content-Type": "application/json",
+                "{RESPAN_DOGFOOD_HEADER}": "1",
                 "Authorization": "Bearer " + os.environ.get("RESPAN_API_KEY", ""),
             }})
             urlopen(req, timeout=30)
@@ -610,13 +684,13 @@ try:
             if e.code < 500:
                 _log(f"client error {{e.code}}, not retrying")
                 break
-            if attempt < 2:
-                _log(f"server error {{e.code}}, retrying in 1s")
-                time.sleep(1)
+            if attempt < {MAX_SEND_RETRIES - 1}:
+                _log(f"server error {{e.code}}, retrying in {RETRY_DELAY_SECONDS}s")
+                time.sleep({RETRY_DELAY_SECONDS})
         except (URLError, OSError) as e:
-            if attempt < 2:
-                _log(f"connection error {{e}}, retrying in 1s")
-                time.sleep(1)
+            if attempt < {MAX_SEND_RETRIES - 1}:
+                _log(f"connection error {{e}}, retrying in {RETRY_DELAY_SECONDS}s")
+                time.sleep({RETRY_DELAY_SECONDS})
 
     # Clear state and payload now that we've sent
     state_file.unlink(missing_ok=True)
