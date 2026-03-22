@@ -116,6 +116,23 @@ DEFAULT_SPAN_NAME = "gemini-cli"
 # Metadata source tag.
 METADATA_SOURCE = "gemini-cli"
 
+# Map Gemini CLI built-in tool function names to friendly display names,
+# matching the pattern used by the Codex hook (_tool_display_name).
+GEMINI_TOOL_DISPLAY_NAMES = {
+    "read_file": "File Read",
+    "read_many_files": "File Read",
+    "write_file": "File Write",
+    "list_directory": "Directory List",
+    "run_shell_command": "Shell",
+    "google_web_search": "Web Search",
+    "web_fetch": "Web Fetch",
+    "glob": "Find Files",
+    "grep_search": "Search Text",
+    "replace": "File Edit",
+    "edit": "File Edit",
+    "memory": "Memory",
+}
+
 # Retry parameters for HTTP sends (mirrors RetryHandler defaults in
 # respan_sdk.utils.retry_handler).
 MAX_SEND_RETRIES = 3
@@ -361,6 +378,46 @@ def detect_model(hook_data: Dict[str, Any]) -> str:
     return DEFAULT_WORKFLOW_NAME
 
 
+# ── Tool formatting (matches Codex hook pattern) ─────────────────
+
+def _tool_display_name(name: str) -> str:
+    """Map Gemini CLI tool function names to friendly display names."""
+    return GEMINI_TOOL_DISPLAY_NAMES.get(name, name or "Unknown")
+
+
+def _format_tool_input(tool_name: str, args: Any) -> str:
+    """Format tool call arguments for display in the span input field."""
+    if not args:
+        return ""
+    if tool_name == "run_shell_command" and isinstance(args, dict):
+        cmd = args.get("command", "")
+        dir_path = args.get("dir_path", "")
+        result = f"Command: {cmd}"
+        if dir_path:
+            result = f"[{dir_path}] {result}"
+        return truncate(result)
+    if tool_name in ("read_file", "read_many_files", "write_file") and isinstance(args, dict):
+        return truncate(args.get("file_path", json.dumps(args, default=str)))
+    if tool_name == "google_web_search" and isinstance(args, dict):
+        return truncate(f"Query: {args.get('query', str(args))}")
+    if tool_name == "web_fetch" and isinstance(args, dict):
+        return truncate(args.get("url", str(args)))
+    if tool_name in ("glob", "grep_search") and isinstance(args, dict):
+        return truncate(args.get("pattern", json.dumps(args, default=str)))
+    if tool_name == "replace" and isinstance(args, dict):
+        path = args.get("file_path", "")
+        old = args.get("old_string", "")
+        if path and old:
+            return truncate(f"{path}: {old!r} → ...")
+        return truncate(json.dumps(args, default=str))
+    if isinstance(args, dict):
+        try:
+            return truncate(json.dumps(args, indent=2))
+        except (TypeError, ValueError):
+            pass
+    return truncate(str(args))
+
+
 # ── Span construction ────────────────────────────────────────────
 
 def build_spans(
@@ -370,13 +427,16 @@ def build_spans(
     config: Optional[Dict[str, Any]] = None,
     start_time_iso: Optional[str] = None,
     tool_turns: int = 0,
+    tool_details: Optional[List[Dict[str, Any]]] = None,
+    thoughts_tokens: int = 0,
 ) -> List[Dict[str, Any]]:
     """Build Respan spans for a Gemini CLI LLM call.
 
     Produces a span tree matching the Claude Code / Codex hook structure:
         Root: gemini-cli (agent container — metadata, latency)
-          └── gemini.chat (generation — model, tokens, messages)
-          └── Tool: Call N (one per tool turn, if any)
+          ├── gemini.chat (generation — model, tokens, messages)
+          ├── Reasoning (if thinking tokens > 0)
+          └── Tool: {name} (one per tool turn, with formatted input)
     """
     spans: List[Dict[str, Any]] = []
 
@@ -432,6 +492,8 @@ def build_spans(
             pass
     if tool_turns > 0:
         metadata["tool_turns"] = tool_turns
+    if thoughts_tokens > 0:
+        metadata["reasoning_tokens"] = thoughts_tokens
 
     # Token counts
     prompt_tokens = tokens.get("prompt_tokens", 0)
@@ -496,20 +558,53 @@ def build_spans(
     spans.append(gen_span)
 
     # ------------------------------------------------------------------
-    # Tool child spans (one per detected tool turn)
+    # Reasoning child span (if thinking/reasoning tokens detected)
+    # Matches the Codex hook's dedicated reasoning span pattern.
     # ------------------------------------------------------------------
+    if thoughts_tokens > 0:
+        spans.append({
+            "trace_unique_id": trace_unique_id,
+            "span_unique_id": f"{SPAN_ID_PREFIX}{safe_id}_reasoning",
+            "span_parent_id": root_span_id,
+            "span_name": "Reasoning",
+            "span_workflow_name": workflow_name,
+            "span_path": "reasoning",
+            "provider_id": "",
+            "metadata": {"reasoning_tokens": thoughts_tokens},
+            "input": "",
+            "output": f"[Reasoning: {thoughts_tokens} tokens]",
+            "timestamp": end_time,
+            "start_time": begin_time,
+        })
+
+    # ------------------------------------------------------------------
+    # Tool child spans (one per detected tool turn)
+    # When tool details are available (from functionCall parts in
+    # candidates), we create rich spans with mapped display names and
+    # formatted input — matching the Codex hook pattern.
+    # ------------------------------------------------------------------
+    _details = tool_details or []
     for i in range(1, tool_turns + 1):
+        detail = _details[i - 1] if i <= len(_details) else None
+        tool_name = (detail.get("name", "") if detail else "") or ""
+        tool_args = (detail.get("args", {}) if detail else {}) or {}
+        display_name = _tool_display_name(tool_name) if tool_name else f"Call {i}"
+        tool_input = _format_tool_input(tool_name, tool_args) if tool_name else ""
+        tool_meta: Dict[str, Any] = {}
+        if tool_name:
+            tool_meta["tool_name"] = tool_name
+
         spans.append({
             "trace_unique_id": trace_unique_id,
             "span_unique_id": f"{SPAN_ID_PREFIX}{safe_id}_tool_{i}",
             "span_parent_id": root_span_id,
-            "span_name": f"Tool: Call {i}",
+            "span_name": f"Tool: {display_name}",
             "span_workflow_name": workflow_name,
-            "span_path": "tool_call",
+            "span_path": f"tool_{tool_name}" if tool_name else "tool_call",
             "log_type": LOG_TYPE_TOOL,
             "provider_id": "",
-            "metadata": {},
-            "input": "",
+            "metadata": tool_meta,
+            "input": tool_input,
             "output": "",
             "timestamp": end_time,
             "start_time": begin_time,
@@ -734,20 +829,31 @@ def _process_chunk(hook_data: Dict[str, Any]) -> None:
     usage = llm_resp.get("usageMetadata", {})
     completion_tokens = usage.get("candidatesTokenCount", 0) or 0
 
-    # Check for finish signal and tool calls in candidates
+    # Track thinking/reasoning tokens (e.g., Gemini 2.5 thinking mode)
+    thoughts_tokens = usage.get("thoughtsTokenCount", 0) or 0
+
+    # Check for finish signal and extract tool call details from candidates.
+    # Gemini CLI currently filters out functionCall parts, but we extract
+    # them as a safety net for future versions (and for rich tool spans).
     candidates = llm_resp.get("candidates", [])
     finish_reason = ""
     has_tool_call = False
+    chunk_tool_details: List[Dict[str, Any]] = []
     if candidates and isinstance(candidates, list) and isinstance(candidates[0], dict):
         finish_reason = candidates[0].get("finishReason", "")
         content = candidates[0].get("content", {})
         if isinstance(content, dict):
             for part in content.get("parts", []):
-                if isinstance(part, dict) and (
-                    "functionCall" in part or "toolCall" in part
-                ):
+                if not isinstance(part, dict):
+                    continue
+                fc = part.get("functionCall") or part.get("toolCall")
+                if fc:
                     has_tool_call = True
-                    break
+                    if isinstance(fc, dict):
+                        chunk_tool_details.append({
+                            "name": fc.get("name", ""),
+                            "args": fc.get("args", {}),
+                        })
 
     # Message count for detecting tool-call resumptions across turns.
     messages = hook_data.get("llm_request", {}).get("messages", [])
@@ -800,6 +906,8 @@ def _process_chunk(hook_data: Dict[str, Any]) -> None:
             )[:-3] + "Z"
         state["accumulated_text"] += chunk_text
         state["last_tokens"] = completion_tokens or state.get("last_tokens", 0)
+        if thoughts_tokens > 0:
+            state["thoughts_tokens"] = thoughts_tokens
         save_stream_state(session_id, state)
         debug(
             f"Accumulated chunk: +{len(chunk_text)} chars, "
@@ -813,6 +921,11 @@ def _process_chunk(hook_data: Dict[str, Any]) -> None:
     if is_tool_turn:
         state["tool_turns"] = state.get("tool_turns", 0) + 1
         state["send_version"] = state.get("send_version", 0) + 1
+        # Store extracted tool details for rich span construction
+        if chunk_tool_details:
+            existing = state.get("tool_details", [])
+            existing.extend(chunk_tool_details)
+            state["tool_details"] = existing
         save_stream_state(session_id, state)
         debug(
             f"Tool call detected via response parts "
@@ -869,6 +982,8 @@ def _process_chunk(hook_data: Dict[str, Any]) -> None:
         config,
         start_time_iso=state.get("first_chunk_time"),
         tool_turns=state.get("tool_turns", 0),
+        tool_details=state.get("tool_details", []),
+        thoughts_tokens=state.get("thoughts_tokens", 0),
     )
 
     n_tool_turns = state.get("tool_turns", 0)
