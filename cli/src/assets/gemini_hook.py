@@ -553,7 +553,19 @@ def build_spans(
         if detail and detail.get("error"):
             tool_meta["error"] = detail["error"]
 
-        spans.append({
+        # Use individual timing from BeforeTool/AfterTool if available,
+        # otherwise fall back to the parent span's timestamps.
+        tool_start = (detail.get("start_time") if detail else None) or begin_time
+        tool_end = (detail.get("end_time") if detail else None) or end_time
+        tool_latency: Optional[float] = None
+        try:
+            t0 = datetime.fromisoformat(tool_start.replace("Z", "+00:00"))
+            t1 = datetime.fromisoformat(tool_end.replace("Z", "+00:00"))
+            tool_latency = max((t1 - t0).total_seconds(), 0.0)
+        except (ValueError, TypeError):
+            pass
+
+        tool_span: Dict[str, Any] = {
             "trace_unique_id": trace_unique_id,
             "span_unique_id": f"gcli_{safe_id}_tool_{i}",
             "span_parent_id": root_span_id,
@@ -565,11 +577,17 @@ def build_spans(
             "metadata": tool_meta,
             "input": tool_input_str,
             "output": truncate(tool_output),
-            "timestamp": end_time,
-            "start_time": begin_time,
-        })
+            "timestamp": tool_end,
+            "start_time": tool_start,
+        }
+        if tool_latency is not None:
+            tool_span["latency"] = tool_latency
+        spans.append(tool_span)
 
     # Apply platform defaults (matches Claude Code / Codex hooks).
+    # Most of these are gateway/proxy parameters (encoding_format, field_name,
+    # delimiter, disable_fallback, disable_log, request_breakdown) that have no
+    # effect on trace ingestion. Kept for consistency with the other hooks.
     respan_defaults = {
         "warnings": "",
         "encoding_format": "float",
@@ -796,7 +814,8 @@ def _process_before_tool(hook_data: Dict[str, Any]) -> None:
 
     state = load_stream_state(session_id)
     pending = state.get("pending_tools", [])
-    pending.append({"name": tool_name, "input": tool_input})
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    pending.append({"name": tool_name, "input": tool_input, "start_time": now_str})
     state["pending_tools"] = pending
     save_stream_state(session_id, state)
 
@@ -823,6 +842,7 @@ def _process_after_tool(hook_data: Dict[str, Any]) -> None:
         if pending[i]["name"] == tool_name:
             detail = pending.pop(i)
             detail["output"] = output
+            detail["end_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
             if error:
                 detail["error"] = error
             completed.append(detail)
